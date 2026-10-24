@@ -1,7 +1,7 @@
 # Two Hours · 2hours
 
-![Version](https://img.shields.io/badge/version-0.2.0-CC785C)
-![License](https://img.shields.io/badge/original_code-Proprietary-blueviolet)
+![Version](https://img.shields.io/badge/version-0.2.1-CC785C)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 把散落的工作进展和阅读材料放进一份报告，集中审阅、口述圈画，再一次确认任务理解与执行去向。Agent 将独立任务送回各自的 Codex 会话，让工作继续推进。
 
@@ -28,7 +28,7 @@ $2hours 继续 /绝对路径/已有运行目录 中尚未分发的任务。
 
 ```bash
 # 目标目录已存在时先保留原安装，不要覆盖未提交修改。
-git clone --branch v0.2.0 https://github.com/WdBlink/2hours.git "${CODEX_HOME:-$HOME/.codex}/skills/2hours"
+git clone --branch v0.2.1 https://github.com/WdBlink/2hours.git "${CODEX_HOME:-$HOME/.codex}/skills/2hours"
 cd "${CODEX_HOME:-$HOME/.codex}/skills/2hours"
 
 # 使用上游安装器获取固定版本的 Cubox 可执行文件；也可复用 PATH 中已有版本。
@@ -84,4 +84,4 @@ node --test vendor/traceink/test/*.test.mjs
 
 四者均按原 MIT 许可集成，各自目录保留完整许可证和 `SOURCE.json`。Traceink 包含本地修订的阅读合同；AM 包含可重建源码、锁文件、renderer bundle 及字体/内嵌依赖许可。鸣谢集中放在这里，原有版权和许可声明保留。
 
-Two Hours 自有代码暂沿用原先的 Proprietary 状态，未授予新的开源许可；上述第三方组件继续分别适用其原许可证。
+Two Hours 自有代码自 v0.2.1 起按 [MIT License](LICENSE) 开源；上述第三方组件继续分别适用其原许可证和版权声明。
