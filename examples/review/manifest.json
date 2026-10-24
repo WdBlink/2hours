@@ -1,0 +1,80 @@
+{
+  "run_id": "synthetic-demo",
+  "scope": {
+    "start": "2026-01-01T00:00:00+08:00",
+    "end_exclusive": "2026-01-02T00:00:00+08:00",
+    "timezone": "Asia/Shanghai"
+  },
+  "sources": [
+    {
+      "id": "DEMO",
+      "provider": "example",
+      "status": "synthetic"
+    }
+  ],
+  "panels": [
+    {
+      "id": "A1",
+      "title": "选择下一步实验",
+      "source_ids": [
+        "DEMO"
+      ]
+    },
+    {
+      "id": "A2",
+      "title": "核对交付范围",
+      "source_ids": [
+        "DEMO"
+      ]
+    },
+    {
+      "id": "A3",
+      "title": "确定本周重点",
+      "source_ids": [
+        "DEMO"
+      ]
+    },
+    {
+      "id": "A4",
+      "title": "接口联调进展",
+      "source_ids": [
+        "DEMO"
+      ]
+    },
+    {
+      "id": "A5",
+      "title": "补齐验证证据",
+      "source_ids": [
+        "DEMO"
+      ]
+    },
+    {
+      "id": "A6",
+      "title": "文档与体验改进",
+      "source_ids": [
+        "DEMO"
+      ]
+    },
+    {
+      "id": "A7",
+      "title": "已完成事项",
+      "source_ids": [
+        "DEMO"
+      ]
+    },
+    {
+      "id": "A8",
+      "title": "阅读与来源覆盖",
+      "source_ids": [
+        "DEMO"
+      ]
+    }
+  ],
+  "coverage": {
+    "status": "complete",
+    "read": 0,
+    "failures": [],
+    "skipped": []
+  },
+  "targets": []
+}

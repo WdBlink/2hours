@@ -1,0 +1,4 @@
+interface:
+  display_name: "Traceink"
+  short_description: "将多平台 Agent 工作痕迹整理成可验证、可思考的工作线"
+  default_prompt: "使用 $traceink 回看本周的 Codex 和 Claude Code 工作，把跨会话工作线整理出来，并停在需要我亲自判断的地方。"

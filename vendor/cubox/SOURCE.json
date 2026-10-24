@@ -1,0 +1,42 @@
+{
+  "official_url": "https://github.com/OLCUBO/cubox-cli",
+  "version": "1.0.10",
+  "upstream_commit": "6eb4e7b9cc383d37829e9c55d4a0cb34959b8e34",
+  "upstream_archive": "https://codeload.github.com/OLCUBO/cubox-cli/tar.gz/6eb4e7b9cc383d37829e9c55d4a0cb34959b8e34",
+  "license": "MIT",
+  "installed_snapshot": {
+    "origin": "existing user-approved local skill installation",
+    "roots": [
+      "SKILL.md",
+      "references"
+    ],
+    "file_count": 4,
+    "tree_sha256": "975dee5e5629c9cb690d4d9a83be7f1db1e0a6b9e3b4920f2a6dfff8a56fa9d3",
+    "hash_method": "SHA-256 of files sorted by relative POSIX path: path UTF-8 + NUL + file bytes + NUL; excludes __pycache__, *.pyc, *.pyo",
+    "upstream_skill_path": "skills/cubox",
+    "upstream_differences": []
+  },
+  "layout": {
+    "SKILL.md, references/": "unchanged installed snapshot",
+    "cli/": "pinned 1.0.10 Go source, module manifests, build files, upstream Node installer/runner and documentation",
+    "LICENSE": "unchanged upstream root license"
+  },
+  "excluded": [
+    "Git metadata",
+    "caches and Python bytecode",
+    "local runtime data and credentials"
+  ],
+  "verified_on": "2026-10-24",
+  "runtime": {
+    "install": "node cli/scripts/install.js",
+    "run": "node cli/scripts/run.js <args>",
+    "binary_path": "cli/bin/cubox-cli (Windows: cli/bin/cubox-cli.exe)",
+    "requirements": "Node.js >=16 plus curl and tar (Windows: PowerShell); Go >=1.23 only for rebuilding from Go source",
+    "download": "official GitHub v1.0.10 release assets; installer does not verify a separate checksum",
+    "verification": "Official v1.0.10 installer and runner version check passed in an isolated macOS arm64 install; generated binary is not bundled."
+  },
+  "verification": {
+    "installed_snapshot": "All included installed files remain byte-for-byte identical. No installed command text changed.",
+    "syntax": "Node syntax check passed for installer and runner; installer and runner version passed on macOS arm64. Go compilation was not performed."
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "official_url": "https://github.com/AGIHunt/blurt",
+  "version": "0.5.0",
+  "upstream_commit": "53171c4d629089cb88a9ee06db60481778bb2ff7",
+  "upstream_archive": "https://codeload.github.com/AGIHunt/blurt/tar.gz/53171c4d629089cb88a9ee06db60481778bb2ff7",
+  "license": "MIT",
+  "installed_snapshot": {
+    "origin": "existing user-approved local skill installation",
+    "roots": [
+      "SKILL.md",
+      "assets",
+      "recorder",
+      "reference",
+      "scripts"
+    ],
+    "file_count": 24,
+    "tree_sha256": "58fca396e314c17432b312f04d0d2667c61f116824e3480ec00867e749d9a748",
+    "hash_method": "SHA-256 of files sorted by relative POSIX path: path UTF-8 + NUL + file bytes + NUL; excludes __pycache__, *.pyc, *.pyo",
+    "upstream_skill_path": "skills/blurt",
+    "upstream_differences": []
+  },
+  "layout": {
+    "SKILL.md, assets/, recorder/, reference/, scripts/": "unchanged installed snapshot",
+    "LICENSE": "unchanged upstream root license"
+  },
+  "excluded": [
+    "Git metadata",
+    "caches and Python bytecode",
+    "local runtime data and credentials",
+    "upstream promotional media, website and tests"
+  ],
+  "verified_on": "2026-10-24",
+  "version_note": "0.5.0 is the upstream plugin metadata version; the installed skill has no independent version field. All 24 installed source files match this commit.",
+  "verification": {
+    "installed_snapshot": "All included installed files remain byte-for-byte identical. No installed command text changed.",
+    "syntax": "All 9 Python scripts parsed successfully without producing bytecode."
+  }
+}

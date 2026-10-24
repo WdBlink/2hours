@@ -1,0 +1,107 @@
+{
+  "official_url": "https://github.com/QingYunA/answer-me-with-html",
+  "version": "0.5.7",
+  "upstream_commit": "fa42f5c15acfc4946d5f5bb314b35476a5a5cda9",
+  "upstream_archive": "https://codeload.github.com/QingYunA/answer-me-with-html/tar.gz/fa42f5c15acfc4946d5f5bb314b35476a5a5cda9",
+  "license": "MIT",
+  "installed_snapshot": {
+    "origin": "existing user-approved local skill installation",
+    "file_count": 6,
+    "tree_sha256": "a4581ba37285e00b36346197ee0a516f1c97123f5357c708a8b6cf5bc2b72d91",
+    "hash_method": "SHA-256 of files sorted by relative POSIX path: path UTF-8 + NUL + file bytes + NUL; excludes __pycache__, *.pyc, *.pyo",
+    "upstream_skill_path": "skills/answer-me-with-html",
+    "upstream_differences": [],
+    "paths": [
+      "LICENSE",
+      "SKILL.md",
+      "licenses/OFL-Bangers.txt",
+      "references/settings.md",
+      "references/video.md",
+      "scripts/am.mjs"
+    ]
+  },
+  "layout": {
+    "source/": "unchanged pinned src/, bin/, index.js, package manifests, original build.mjs and inline-assets.mjs, and root LICENSE",
+    "SKILL.md, references/, scripts/am.mjs, licenses/OFL-Bangers.txt, LICENSE": "unchanged installed 0.5.7 snapshot; LICENSE matches upstream root",
+    "licenses/": "Original third-party LICENSE/LEGAL files from integrity-verified locked npm packages, plus canonical Apache-2.0 text; runtime and source files are unchanged."
+  },
+  "excluded": [
+    "Git metadata",
+    "caches and Python bytecode",
+    "local runtime data and credentials",
+    "upstream website, examples, tests, release and publishing tooling; package.json retains original non-build script declarations"
+  ],
+  "verified_on": "2026-10-24",
+  "rebuild": "cd source && npm ci --ignore-scripts && npm run build; output: source/skills/answer-me-with-html/scripts/am.mjs",
+  "license_note": "The installed bundle retains its original notices. Its dagre.esm.js.LEGAL.txt reference is supplied as licenses/dagre.esm.js.LEGAL.txt; original dagre, graphlib, Marked and Temml license files are included there. Marked LICENSE includes its Markdown BSD notice. The Apache-2.0 text referenced by the Temml notice is supplied in licenses/LICENSE-Apache-2.0.txt. Existing Bangers OFL remains unchanged. No additional LICENSE or NOTICE files were present in the five locked runtime npm packages.",
+  "verification": {
+    "installed_snapshot": "All included installed files remain byte-for-byte identical. No installed command text changed.",
+    "source_rebuild": "npm ci --ignore-scripts && npm run build completed; rebuilt bundle is byte-for-byte identical to the installed runtime. Build dependencies and generated copy were removed.",
+    "runtime_sha256": "e45f307e0b78765342faf9dab7802c3f56d8a2d0ec1a140081a3ca181ab9d504",
+    "third_party_licenses": "All five official npm archives matched package-lock.json SHA-512 integrity values. All retained external license-file references were checked. dagre LEGAL, MIT/BSD notices and the Apache-2.0 text are present; Bangers OFL matches its package. No dependency installation was required."
+  },
+  "third_party_licenses": [
+    {
+      "package": "@dagrejs/dagre",
+      "version": "3.1.1",
+      "archive_url": "https://registry.npmjs.org/@dagrejs/dagre/-/dagre-3.1.1.tgz",
+      "archive_integrity": "sha512-zroZB1dFOFiGgv4Xcrn1DckB1o4aOikPqD2NDQPV0WM//CXGcS6xiD0rNkqHmw6FEg4tabt4nxPLwgCWT+Vb2A==",
+      "package_path": "dist/dagre.esm.js.LEGAL.txt",
+      "local_path": "licenses/dagre.esm.js.LEGAL.txt",
+      "sha256": "9148bffb1e84382a8b6668eeb2b53c6a554341d714fba129856ea5eb350d35f3"
+    },
+    {
+      "package": "@dagrejs/dagre",
+      "version": "3.1.1",
+      "archive_url": "https://registry.npmjs.org/@dagrejs/dagre/-/dagre-3.1.1.tgz",
+      "archive_integrity": "sha512-zroZB1dFOFiGgv4Xcrn1DckB1o4aOikPqD2NDQPV0WM//CXGcS6xiD0rNkqHmw6FEg4tabt4nxPLwgCWT+Vb2A==",
+      "package_path": "LICENSE",
+      "local_path": "licenses/LICENSE-dagre.txt",
+      "sha256": "6a349742a6cb219d5a2fc8d0844f6d89a6efc62e20c664450d884fc7ff2d6015"
+    },
+    {
+      "package": "@dagrejs/graphlib",
+      "version": "4.0.5",
+      "archive_url": "https://registry.npmjs.org/@dagrejs/graphlib/-/graphlib-4.0.5.tgz",
+      "archive_integrity": "sha512-7xrBTqIts3o+PMUZX97wSc+7TUbW+/rULzGNCTP6yooNVDXbzw4Wutg/H/xOutTB/c/k0YqOAavgPh4/Zk9PFA==",
+      "package_path": "LICENSE",
+      "local_path": "licenses/LICENSE-graphlib.txt",
+      "sha256": "6a349742a6cb219d5a2fc8d0844f6d89a6efc62e20c664450d884fc7ff2d6015"
+    },
+    {
+      "package": "marked",
+      "version": "18.0.14",
+      "archive_url": "https://registry.npmjs.org/marked/-/marked-18.0.14.tgz",
+      "archive_integrity": "sha512-mBHK6FBHuBAlhgRe88w9F0O1AbwwXJUcQibUbC/QcdTbVGAD7aWza+xt3N6oT/jCZx3/OMeS+8rnuiHZcQ9s7A==",
+      "package_path": "LICENSE",
+      "local_path": "licenses/LICENSE-marked.txt",
+      "sha256": "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
+    },
+    {
+      "package": "temml",
+      "version": "0.14.0",
+      "archive_url": "https://registry.npmjs.org/temml/-/temml-0.14.0.tgz",
+      "archive_integrity": "sha512-tz1LW/5IZpThK8c7ZpdTSH/n56eAj+ThirLieErtKxYC3EKCIiB4sKdRUehAgH+fQmvIKqMfP3gqTLBdLpy9zw==",
+      "package_path": "LICENSE",
+      "local_path": "licenses/LICENSE-temml.txt",
+      "sha256": "12b4e5592a12baaf50637881f2cb9d66667b26b8d51a73cd8f0d6bcefe176ab6"
+    },
+    {
+      "license": "Apache-2.0",
+      "source_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "local_path": "licenses/LICENSE-Apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "applies_to": "Temml 0.14.0 bundled mhchem and React-derived portions identified in scripts/am.mjs retained license notice."
+    },
+    {
+      "package": "@fontsource/bangers",
+      "version": "5.3.0",
+      "archive_url": "https://registry.npmjs.org/@fontsource/bangers/-/bangers-5.3.0.tgz",
+      "archive_integrity": "sha512-tSRpmWwkqrO9PCqo9wjA/99/5sLOIWm5cf51G3ooEHd8qZus8sVSSJoWp/7EvM5rIgZMjKRG6XtY9yeisKxE7g==",
+      "package_path": "LICENSE",
+      "local_path": "licenses/OFL-Bangers.txt",
+      "sha256": "09ef36fcae68a2ba21cc319fd44c09ba40f43163076bcafc14fdfe4cc033e7a2",
+      "status": "Existing installed file, unchanged; verified against the official locked package."
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "title": "先把注意力留给重要的决定。",
+  "subtitle": "一份一份地看，写下意见，然后集中确认。",
+  "period_label": "01.01 00:00 — 01.02 00:00",
+  "review_label": "示例审阅 · 北京时间",
+  "coverage_label": "8 张虚构卡片 · 不含真实会话",
+  "cards": [
+    {
+      "id": "A1",
+      "title": "选择下一步实验",
+      "lane": "decide",
+      "label": "研究",
+      "value": "1",
+      "unit": "项",
+      "state": "虚构示例",
+      "context": "仅用于演示，不对应真实任务"
+    },
+    {
+      "id": "A2",
+      "title": "核对交付范围",
+      "lane": "decide",
+      "label": "交付",
+      "value": "2",
+      "unit": "项",
+      "state": "虚构示例",
+      "context": "仅用于演示，不对应真实任务"
+    },
+    {
+      "id": "A3",
+      "title": "确定本周重点",
+      "lane": "decide",
+      "label": "计划",
+      "value": "3",
+      "unit": "项",
+      "state": "虚构示例",
+      "context": "仅用于演示，不对应真实任务"
+    },
+    {
+      "id": "A4",
+      "title": "接口联调进展",
+      "lane": "follow",
+      "label": "开发",
+      "value": "4",
+      "unit": "项",
+      "state": "虚构示例",
+      "context": "仅用于演示，不对应真实任务"
+    },
+    {
+      "id": "A5",
+      "title": "补齐验证证据",
+      "lane": "follow",
+      "label": "验证",
+      "value": "5",
+      "unit": "项",
+      "state": "虚构示例",
+      "context": "仅用于演示，不对应真实任务"
+    },
+    {
+      "id": "A6",
+      "title": "文档与体验改进",
+      "lane": "follow",
+      "label": "体验",
+      "value": "6",
+      "unit": "项",
+      "state": "虚构示例",
+      "context": "仅用于演示，不对应真实任务"
+    },
+    {
+      "id": "A7",
+      "title": "已完成事项",
+      "lane": "result",
+      "label": "成果",
+      "value": "7",
+      "unit": "项",
+      "state": "虚构示例",
+      "context": "仅用于演示，不对应真实任务"
+    },
+    {
+      "id": "A8",
+      "title": "阅读与来源覆盖",
+      "lane": "result",
+      "label": "阅读",
+      "value": "8",
+      "unit": "项",
+      "state": "虚构示例",
+      "context": "仅用于演示，不对应真实任务"
+    }
+  ]
+}

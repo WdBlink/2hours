@@ -1,0 +1,82 @@
+/* Charts (src/components/chart.js). Only a page with a chart carries this file, the way only a page with math carries the math styles.
+   Series colors are the diagram tokens --series-1 to --series-6 (docs/reference.md, "Diagram tokens"): a theme that sets one wins, and
+   the fallbacks are the fixed palette below (Tableau 10 style), a set for light and a set for dark. Bars carry their value, the legend names
+   the series and the data table holds the numbers, so a color is never the only way to read a bar. The axis, grid and labels read the usual
+   tokens, so a theme that sets nothing still gets a chart in its own colors. */
+html {
+  --am-ch-1: #4e79a7; --am-ch-2: #f28e2b; --am-ch-3: #e15759; --am-ch-4: #76b7b2; --am-ch-5: #59a14f; --am-ch-6: #b07aa1;
+}
+html[data-mode="dark"] {
+  --am-ch-1: #7aa6d6; --am-ch-2: #f5a55a; --am-ch-3: #ef7f80; --am-ch-4: #8fd0cb; --am-ch-5: #7cc472; --am-ch-6: #c99bbd;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-mode="auto"] {
+    --am-ch-1: #7aa6d6; --am-ch-2: #f5a55a; --am-ch-3: #ef7f80; --am-ch-4: #8fd0cb; --am-ch-5: #7cc472; --am-ch-6: #c99bbd;
+  }
+}
+
+.am-ch-s1 { fill: var(--series-1, var(--am-ch-1)); }
+.am-ch-s2 { fill: var(--series-2, var(--am-ch-2)); }
+.am-ch-s3 { fill: var(--series-3, var(--am-ch-3)); }
+.am-ch-s4 { fill: var(--series-4, var(--am-ch-4)); }
+.am-ch-s5 { fill: var(--series-5, var(--am-ch-5)); }
+.am-ch-s6 { fill: var(--series-6, var(--am-ch-6)); }
+/* A highlighted row of a single series takes the accent color; in a chart with a highlight the other rows are gray (a line is never gray). */
+.am-ch-hi { fill: var(--accent, #1d5fbf); }
+.am-ch-row.is-dim .am-ch-bar, .am-ch-row.is-dim .am-ch-slice, .am-ch-row.is-dim .am-ch-sw { fill: var(--line-2, #d6dae1); fill: color-mix(in oklch, var(--ink-3, #8b929e) 40%, var(--paper, #ffffff)); }
+
+/* A line: a stroke in the series color, a dot on each point; the dot has an outline in the paper color where lines cross. A pie slice has
+   the same outline, which is the gap between slices. */
+.am-ch-line { fill: none; stroke-width: 2.5; stroke-linecap: round; }
+.am-ch-line.am-ch-s1 { stroke: var(--series-1, var(--am-ch-1)); }
+.am-ch-line.am-ch-s2 { stroke: var(--series-2, var(--am-ch-2)); }
+.am-ch-line.am-ch-s3 { stroke: var(--series-3, var(--am-ch-3)); }
+.am-ch-line.am-ch-s4 { stroke: var(--series-4, var(--am-ch-4)); }
+.am-ch-line.am-ch-s5 { stroke: var(--series-5, var(--am-ch-5)); }
+.am-ch-line.am-ch-s6 { stroke: var(--series-6, var(--am-ch-6)); }
+.am-ch-dot, .am-ch-slice { stroke: var(--paper, #ffffff); stroke-width: 1.5; }
+.am-ch-slice { stroke-width: 2; stroke-linejoin: round; }
+.am-ch-guide { stroke: var(--ink-3, #8b929e); stroke-width: 1; stroke-dasharray: 3 3; }
+
+.am-ch-grid { stroke: var(--line-2, #d6dae1); stroke-width: 1; }
+.am-ch-zero { stroke: var(--ink-3, #8b929e); stroke-width: 1; }
+.am-diagram .am-ch-cat, .am-diagram .am-ch-leg { fill: var(--ink-2, #4b5260); font-size: var(--am-fs-d-chartCat); }
+.am-diagram .am-ch-tick, .am-diagram .am-ch-val { fill: var(--ink-2, #4b5260); font-size: var(--am-fs-d-chartTick); }
+/* The value labels of a highlighted row in a chart with several series take the color of their series, in a heavier weight to read on it. */
+.am-diagram .am-ch-val.am-ch-s1, .am-diagram .am-ch-val.am-ch-s2, .am-diagram .am-ch-val.am-ch-s3, .am-diagram .am-ch-val.am-ch-s4, .am-diagram .am-ch-val.am-ch-s5, .am-diagram .am-ch-val.am-ch-s6 { font-weight: 600; }
+.am-diagram .am-ch-val.am-ch-s1 { fill: var(--series-1, var(--am-ch-1)); }
+.am-diagram .am-ch-val.am-ch-s2 { fill: var(--series-2, var(--am-ch-2)); }
+.am-diagram .am-ch-val.am-ch-s3 { fill: var(--series-3, var(--am-ch-3)); }
+.am-diagram .am-ch-val.am-ch-s4 { fill: var(--series-4, var(--am-ch-4)); }
+.am-diagram .am-ch-val.am-ch-s5 { fill: var(--series-5, var(--am-ch-5)); }
+.am-diagram .am-ch-val.am-ch-s6 { fill: var(--series-6, var(--am-ch-6)); }
+/* A value label may sit over a line or a guide: a halo in the paper color keeps it readable. */
+.am-diagram .am-ch-val { paint-order: stroke; stroke: var(--paper, #ffffff); stroke-width: 3px; stroke-linejoin: round; }
+.am-diagram .am-ch-num { fill: var(--ink-2, #4b5260); font-size: var(--am-fs-d-chartCat); font-variant-numeric: tabular-nums; }
+.am-diagram .am-ch-total { fill: var(--ink, #1a1d23); font-weight: 600; }
+
+/* The data table under the chart: collapsed, for a screen reader and for a reader who wants the numbers. It looks like a Markdown table. */
+.am-ch-data { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line-2); text-align: start; font-size: var(--am-fs-text); }
+.am-ch-data summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; font: var(--am-fs-label)/1.3 var(--font-mono); color: var(--ink-3); letter-spacing: .04em; }
+.am-ch-data summary::-webkit-details-marker { display: none; }
+.am-ch-data summary::before { content: ""; width: 0; height: 0; border-block: 4px solid transparent; border-inline-start: 6px solid currentColor; transition: transform .15s; }
+.am-ch-data[open] summary::before { transform: rotate(90deg); }
+/* The triangle points to the end side, which is the left on a right-to-left page: it turns the other way to point down. */
+html[dir="rtl"] .am-ch-data[open] summary::before { transform: rotate(-90deg); }
+@media (prefers-reduced-motion: reduce) { .am-ch-data summary::before { transition: none; } }
+.am-ch-data summary:hover { color: var(--ink); }
+.am-ch-data table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: var(--am-fs-text); }
+.am-ch-data thead th { font: var(--am-fs-label)/1.3 var(--font-mono); color: var(--ink-2); font-weight: 400; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.am-ch-data thead th::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-inline-end: 6px; }
+.am-ch-data thead th:nth-child(2)::before { background: var(--series-1, var(--am-ch-1)); }
+.am-ch-data thead th:nth-child(3)::before { background: var(--series-2, var(--am-ch-2)); }
+.am-ch-data thead th:nth-child(4)::before { background: var(--series-3, var(--am-ch-3)); }
+.am-ch-data thead th:nth-child(5)::before { background: var(--series-4, var(--am-ch-4)); }
+.am-ch-data thead th:nth-child(6)::before { background: var(--series-5, var(--am-ch-5)); }
+.am-ch-data thead th:nth-child(7)::before { background: var(--series-6, var(--am-ch-6)); }
+.am-ch-data--pie thead th::before { content: none; }
+.am-ch-data th, .am-ch-data td { padding: 7px 10px; font-variant-numeric: tabular-nums; }
+.am-ch-data th[scope="row"] { text-align: start; font-weight: 400; }
+/* Numbers read left to right in every language and line up on their right edge, under the series name. */
+.am-ch-data td, .am-ch-data thead th { text-align: right; }
+.am-ch-data tbody tr:nth-child(even) > * { background: var(--fill); }

@@ -1,0 +1,49 @@
+{
+  "name": "traceink",
+  "version": "0.2.0",
+  "description": "Turn scattered AI-agent traces into evidence-linked worklines you can understand and carry forward.",
+  "type": "module",
+  "bin": {
+    "traceink": "bin/traceink.mjs"
+  },
+  "files": [
+    "bin/traceink.mjs",
+    "skill/SKILL.md",
+    "skill/agents/openai.yaml",
+    "skill/references/editorial-contract.md",
+    "copilot/SKILL.md",
+    "copilot/scripts/session-source.mjs",
+    "LICENSE",
+    "README.md",
+    "README.en.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WdBlink/traceink.git"
+  },
+  "homepage": "https://github.com/WdBlink/traceink#readme",
+  "bugs": {
+    "url": "https://github.com/WdBlink/traceink/issues"
+  },
+  "keywords": [
+    "codex",
+    "agent-skill",
+    "work-review",
+    "weekly-review",
+    "claude-code",
+    "work-journal",
+    "agent-traces",
+    "knowledge-management",
+    "work-continuity"
+  ],
+  "author": "WdBlink",
+  "license": "MIT"
+}

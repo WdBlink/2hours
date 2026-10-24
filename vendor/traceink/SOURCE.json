@@ -1,0 +1,39 @@
+{
+  "official_url": "https://github.com/WdBlink/traceink",
+  "version": "0.2.0",
+  "upstream_commit": "ecadc290c9faed668219d7cf5543588d505d148b",
+  "upstream_archive": "https://codeload.github.com/WdBlink/traceink/tar.gz/ecadc290c9faed668219d7cf5543588d505d148b",
+  "license": "MIT",
+  "installed_snapshot": {
+    "origin": "existing user-approved local skill installation",
+    "roots": [
+      "SKILL.md",
+      "agents",
+      "references"
+    ],
+    "file_count": 3,
+    "tree_sha256": "083c2b8d0484fd02733b4ea1ee8e85bd72f126f805113d2b1a6a2203ff168d2e",
+    "hash_method": "SHA-256 of files sorted by relative POSIX path: path UTF-8 + NUL + file bytes + NUL; excludes __pycache__, *.pyc, *.pyo",
+    "upstream_skill_path": "skill",
+    "upstream_differences": [
+      "SKILL.md",
+      "references/editorial-contract.md"
+    ]
+  },
+  "layout": {
+    "SKILL.md, agents/, references/": "unchanged installed snapshot",
+    "skill/": "duplicate installed snapshot required by the unmodified installer",
+    "bin/, copilot/, package*.json, README*.md, test/, LICENSE": "unchanged pinned upstream source"
+  },
+  "excluded": [
+    "Git metadata",
+    "caches and Python bytecode",
+    "local runtime data and credentials"
+  ],
+  "verified_on": "2026-10-24",
+  "version_note": "0.2.0 identifies the upstream CLI. The installed SKILL.md and editorial-contract.md contain local reader-first expression changes whose own upstream commit is unconfirmed; those files are retained verbatim.",
+  "verification": {
+    "installed_snapshot": "All included installed files remain byte-for-byte identical. No installed command text changed.",
+    "upstream_tests": "14/14 node --test test/*.test.mjs checks passed with isolated temporary home directories."
+  }
+}
