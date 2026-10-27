@@ -399,5 +399,151 @@ class DispatchTests(unittest.TestCase):
             dispatch.prepare_review(self.run)
 
 
+class AutomaticDispatchTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = DispatchTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.run = self.fixture.run.resolve()
+        self.fixture.run = self.run
+        self.home = self.run / "settings-home"
+        self.home.mkdir()
+        patcher = patch.object(dispatch, "SETTINGS_HOME", self.home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.fixture.items.update(reviewed=False, source_video="recording.mp4")
+        for task in self.fixture.routes["tasks"]:
+            task["target_basis"] = "explicit"
+        self.fixture.save_inputs()
+        (self.run / "blurt/recording.mp4").write_bytes(b"user voice")
+
+    def enable(self, consent_id="consent-1", bind=True):
+        self.consent = {"id": consent_id, "enabled_at": dispatch.now()}
+        dispatch.write_json(self.home / "settings.json", {"dispatch_mode": "automatic", "dispatch_consent": self.consent})
+        if bind:
+            dispatch.bind_input(self.run, "blurt/recording.mp4", self.consent, self.fixture.manifest["targets"])
+
+    def test_default_disabled_and_no_retroactive_authorization(self):
+        with self.assertRaisesRegex(dispatch.DispatchError, "disabled"):
+            dispatch.prepare_auto(self.run)
+        self.assertFalse((self.run / "dispatch-plan.json").exists())
+        self.enable(bind=False)
+        plan = dispatch.prepare_auto(self.run)
+        self.assertEqual(plan["batches"], [])
+        self.assertEqual(len(plan["pending"]), 2)
+        self.assertFalse((self.run / "approval.json").exists())
+        self.assertFalse((self.run / "review-confirmation.json").exists())
+
+    def test_automatic_claim_is_idempotent_and_receipt_recovers_after_disable(self):
+        self.enable()
+        original = (self.run / "blurt/items.json").read_bytes()
+        plan = dispatch.prepare_auto(self.run)
+        self.assertEqual(dispatch.prepare_auto(self.run), plan)
+        self.assertEqual(plan["authorization_mode"], "automatic")
+        self.assertIn("选择自动派发后主动提交", plan["batches"][0]["prompt"])
+        self.assertNotIn("用户已审核", plan["batches"][0]["prompt"])
+        claimed = dispatch.claim(self.run, "B1")
+        self.assertEqual(claimed["tool"], "send_message_to_thread")
+        with self.assertRaisesRegex(dispatch.DispatchError, "already claimed"):
+            dispatch.claim(self.run, "B1")
+        dispatch.write_json(self.home / "settings.json", {"dispatch_mode": "manual"})
+        response = self.run / "response.json"
+        dispatch.write_json(response, {"ok": True, "threadId": "thread-1"})
+        self.assertEqual(dispatch.receipt(self.run, "B1", response, "sent")["status"], "sent")
+        self.assertFalse(dispatch.status(self.run)["snapshot_current"])
+        self.assertEqual(dispatch.status(self.run)["batches"][0]["status"], "sent")
+        with self.assertRaisesRegex(dispatch.DispatchError, "dispatch attempts"):
+            dispatch.prepare_review(self.run)
+        self.assertEqual((self.run / "blurt/items.json").read_bytes(), original)
+        self.assertFalse((self.run / "approval.json").exists())
+
+    def test_disabled_or_expired_opt_in_blocks_unclaimed_batches(self):
+        self.enable()
+        dispatch.prepare_auto(self.run)
+        dispatch.write_json(self.home / "settings.json", {"dispatch_mode": "manual"})
+        with self.assertRaisesRegex(dispatch.DispatchError, "disabled"):
+            dispatch.claim(self.run, "B1")
+        self.enable("consent-2", bind=False)
+        with self.assertRaisesRegex(dispatch.DispatchError, "snapshot changed"):
+            dispatch.claim(self.run, "B1")
+        self.assertFalse((self.run / "dispatch-state.json").exists())
+        self.assertEqual(dispatch.prepare_auto(self.run)["batches"], [])
+
+    def test_changed_voice_or_processed_items_invalidate_old_plan(self):
+        self.enable()
+        dispatch.prepare_auto(self.run)
+        self.fixture.items["items"][0]["quote"] = "新的处理内容"
+        self.fixture.save("blurt/items.json", self.fixture.items)
+        with self.assertRaisesRegex(dispatch.DispatchError, "snapshot changed"):
+            dispatch.claim(self.run, "B1")
+        (self.run / "blurt/recording.mp4").write_bytes(b"different voice")
+        self.assertEqual(dispatch.prepare_auto(self.run)["batches"], [])
+
+    def test_unknown_target_and_ambiguous_item_are_individually_pending(self):
+        self.enable()
+        self.fixture.routes["tasks"][1]["target_key"] = "unknown"
+        self.fixture.save("routes.json", self.fixture.routes)
+        plan = dispatch.prepare_auto(self.run)
+        self.assertEqual([task["id"] for task in plan["batches"][0]["tasks"]], ["D1"])
+        self.assertEqual(plan["pending"][0]["task_id"], "D2")
+        self.fixture.routes["tasks"][1]["target_key"] = "T1"
+        self.fixture.items["items"][1]["questions"] = ["具体要改哪里"]
+        self.fixture.save_inputs()
+        self.assertEqual(dispatch.prepare_auto(self.run)["pending"][0]["task_id"], "D2")
+
+    def new_project(self):
+        self.enable()
+        self.fixture.items["items"][1]["quote"] = "请在 Two Hours 项目新建会话做验证"
+        target = {"key": "T2", "type": "project", "project_id": "observed-project-2", "title": "Two Hours", "source_ids": ["S1"],
+                  "verification": {"tool": "list_projects", "id": "observed-project-2", "verified_at": dispatch.now()}}
+        self.fixture.routes["targets"] = [*self.fixture.manifest["targets"], target]
+        self.fixture.routes["tasks"][1].update(target_key="T2", target_quote="请在 Two Hours 项目新建会话做验证")
+        self.fixture.save_inputs()
+
+    def test_explicit_new_project_with_native_verification_is_eligible(self):
+        self.new_project()
+        plan = dispatch.prepare_auto(self.run)
+        self.assertEqual(len(plan["batches"]), 2)
+        self.assertEqual(plan["pending"], [])
+        self.assertEqual(dispatch.claim(self.run, "B2")["tool"], "create_thread")
+
+    def test_new_project_quote_must_be_original_user_words(self):
+        self.new_project()
+        self.fixture.routes["tasks"][1]["target_quote"] = "编造的新项目指令"
+        self.fixture.save("routes.json", self.fixture.routes)
+        plan = dispatch.prepare_auto(self.run)
+        self.assertEqual(len(plan["batches"]), 1)
+        self.assertIn("原话", " ".join(plan["pending"][0]["reasons"]))
+
+    def test_new_project_verification_id_must_match_target(self):
+        self.new_project()
+        self.fixture.routes["targets"][1]["verification"]["id"] = "different-project"
+        self.fixture.save("routes.json", self.fixture.routes)
+        plan = dispatch.prepare_auto(self.run)
+        self.assertEqual(len(plan["batches"]), 1)
+        self.assertIn("核验", " ".join(plan["pending"][0]["reasons"]))
+
+    def test_written_submission_hash_and_original_authorization_are_bound(self):
+        self.enable(bind=False)
+        (self.run / "blurt/items.json").unlink()
+        dispatch.write_json(self.run / "written-items.json", {"reviewed": True, "items": self.fixture.items["items"]})
+        dispatch.bind_input(self.run, "written-items.json", self.consent, self.fixture.manifest["targets"])
+        plan = dispatch.prepare_auto(self.run)
+        self.assertEqual(len(plan["batches"]), 1)
+        self.fixture.items["items"][0]["quote"] = "改过的文字"
+        dispatch.write_json(self.run / "written-items.json", {"reviewed": True, "items": self.fixture.items["items"]})
+        self.assertEqual(dispatch.prepare_auto(self.run)["batches"], [])
+
+    def test_automatic_plan_without_claim_can_reach_manual_review(self):
+        self.enable()
+        dispatch.prepare_auto(self.run)
+        review = dispatch.prepare_review(self.run)
+        self.assertEqual(dispatch.current_review(self.run), review)
+        self.assertFalse((self.run / "dispatch-plan.json").exists())
+        approval, _ = dispatch.approve_review(self.run, self.fixture.review_body(review))
+        self.assertTrue(approval["batch_ids"])
+        self.assertNotIn("authorization_mode", dispatch.current_plan(self.run))
+
+
 if __name__ == "__main__":
     unittest.main()

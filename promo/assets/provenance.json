@@ -1,0 +1,65 @@
+{
+  "synthetic": true,
+  "source_sha256": {
+    "examples/review/report.md": "f8f25e13e6217d959536f2bc9f734c723f29c89387739e1245c739cf7315106c",
+    "examples/review/board.json": "1e3fab4781b30d5d0a144830b5c721b124bcbdd7f0a1011185a79f7ccd1ce569",
+    "examples/review/manifest.json": "3fd94a05cb66346d27093012e490cd3eb830b85805a47a49045132971ceab4cb",
+    "assets/board.css": "6825e6b02a470d1beeaaf5e2e953a0ea56c9e5ea7c85c8bb802d9036c6bc4044",
+    "assets/board.js": "2c12fd103b417abf020f2909bb8600fed5ce169ecf574885d23e55683cc7fa0e",
+    "assets/bridge.js": "bfb2c51b99498fcc4d7db8fddd477efe69f4771eb5731c104b6272b905a7dcee",
+    "assets/brand/mark.svg": "d3b8f6b1270f9dea8d140ed7e73a6f71ce38a12cf58a564ca25cb2c11c810948",
+    "scripts/build_board.py": "2d60ea1ffdfff4d9cfdde81e600abc619a43b3dfd23d6c0589ce5d51aa7ba62f"
+  },
+  "network": "All browser requests intercepted; no live network requests or actual approval/dispatch.",
+  "requests": [
+    [
+      "GET",
+      "/"
+    ],
+    [
+      "GET",
+      "/status"
+    ],
+    [
+      "GET",
+      "/review-state"
+    ],
+    [
+      "GET",
+      "/review-plan"
+    ],
+    [
+      "GET",
+      "/plan"
+    ],
+    [
+      "GET",
+      "/review-state"
+    ],
+    [
+      "GET",
+      "/status"
+    ],
+    [
+      "GET",
+      "/review-plan"
+    ],
+    [
+      "GET",
+      "/review-state"
+    ],
+    [
+      "GET",
+      "/status"
+    ],
+    [
+      "GET",
+      "/review-plan"
+    ],
+    [
+      "POST",
+      "/approve-review"
+    ]
+  ],
+  "page_errors": []
+}

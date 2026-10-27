@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import json
 import os
+import plistlib
 import queue
 import re
 import shutil
@@ -42,8 +43,11 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _common import (BLURT_HOME, IS_LINUX, IS_MAC, IS_WIN, STATE_FILE, die, ffmpeg_bin, fix_tcl_env, fmt_ts,  # noqa: E402
+from _common import (BLURT_HOME, IS_LINUX, IS_MAC, IS_WIN, STATE_FILE, CommandLog, append_command, die, ffmpeg_bin, fix_tcl_env, fmt_ts,  # noqa: E402
                      global_config, load_json, new_session_dir, probe_duration, run, save_json, update_global_config)
+
+from _identity import (APP_BUNDLE, APP_NAME, BUNDLE_ID, EXECUTABLE, ICON, INSTALLED_APP,
+                       PROJECT_FOLDER, TWO_HOURS, identity)
 
 VIRTUAL_MIC_HINTS = ("virtual", "blackhole", "loopback", "soundflower", "zoom", "teams", "oray", "vb-audio",
                      "voicemeeter", "stereo mix", "立体声混音", "aggregate", "聚集", "cable")
@@ -230,33 +234,35 @@ def mux(video: Path, audio: Path | None, offset: float, dest: Path) -> None:
 
 
 # ---------------------------------------------------------------- native macOS recorder
-APP_BUNDLE = BLURT_HOME / "Blurt.app"
-ICON = Path(__file__).resolve().parent.parent / "assets" / "icon.png"
-INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>dev.blurt.recorder</string>
-<key>CFBundleName</key><string>Blurt</string>
-<key>CFBundleDisplayName</key><string>Blurt 口喷鸡</string>
-<key>CFBundleExecutable</key><string>blurt-recorder</string>
-<key>CFBundleIconFile</key><string>AppIcon</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.5.0</string>
-<key>LSMinimumSystemVersion</key><string>13.0</string>
-<key>LSUIElement</key><true/>
-<key>NSMicrophoneUsageDescription</key><string>Blurt records your voice while you narrate feedback.</string>
-<key>NSScreenCaptureUsageDescription</key><string>Blurt records the screen area you select.</string>
-</dict></plist>
-"""
+INFO_PLIST = plistlib.dumps({
+    "CFBundleIdentifier": BUNDLE_ID,
+    "CFBundleName": APP_NAME,
+    "CFBundleDisplayName": APP_NAME if TWO_HOURS else "Blurt 口喷鸡",
+    "CFBundleExecutable": EXECUTABLE,
+    "CFBundleIconFile": "AppIcon",
+    "CFBundlePackageType": "APPL",
+    "CFBundleShortVersionString": "0.5.0",
+    "LSMinimumSystemVersion": "13.0",
+    "LSUIElement": True,
+    "NSMicrophoneUsageDescription": f"{APP_NAME} records your voice while you narrate feedback.",
+    "NSScreenCaptureUsageDescription": f"{APP_NAME} records the screen area you select.",
+    "RecorderHome": str(BLURT_HOME),
+    "RecorderProjectFolder": PROJECT_FOLDER,
+    "RecorderHelpURL": "https://github.com/WdBlink/2hours" if TWO_HOURS else "https://github.com/AGIHunt/blurt",
+}).decode()
 
 
 def native_binary(build: bool = True) -> Path | None:
-    """The recorder lives inside ~/.blurt/Blurt.app so it can also be launched as a standalone app."""
+    """Build this distribution's signed native recorder without requesting capture permissions."""
     if not IS_MAC or not SWIFT_SRC.exists():
         return None
     remember_skill_dir()
-    digest = hashlib.sha256(SWIFT_SRC.read_bytes() + INFO_PLIST.encode()).hexdigest()[:12]
-    exe = APP_BUNDLE / "Contents" / "MacOS" / "blurt-recorder"
+    assets = [ICON, ICON.parent / "MenuIconTemplate.png", ICON.parent / "MenuIconTemplate@2x.png"]
+    if TWO_HOURS and any(not asset.is_file() for asset in assets):
+        die(f"Two Hours brand assets are missing under {ICON.parent}. Reinstall the complete Two Hours package.")
+    digest = hashlib.sha256(SWIFT_SRC.read_bytes() + INFO_PLIST.encode() +
+                            b"".join(p.read_bytes() for p in assets if p.is_file())).hexdigest()[:12]
+    exe = APP_BUNDLE / "Contents" / "MacOS" / EXECUTABLE
     stamp = APP_BUNDLE / "Contents" / "Resources" / "source.sha"
     if exe.exists() and stamp.exists() and stamp.read_text().strip() == digest:
         return exe
@@ -266,12 +272,12 @@ def native_binary(build: bool = True) -> Path | None:
     if not swiftc:
         return None
     print("building native recorder (one-time, ~20s)…", file=sys.stderr, flush=True)
-    tmp = BLURT_HOME / "build" / "blurt-recorder"
+    tmp = BLURT_HOME / "build" / EXECUTABLE
     tmp.parent.mkdir(parents=True, exist_ok=True)
     if os.environ.get("BLURT_UNIVERSAL"):  # release builds: arm64 + x86_64 in one binary
         parts = []
         for arch in ("arm64", "x86_64"):
-            out_arch = tmp.with_name(f"blurt-recorder-{arch}")
+            out_arch = tmp.with_name(f"{EXECUTABLE}-{arch}")
             r = run([swiftc, "-O", "-swift-version", "5", "-target", f"{arch}-apple-macos13.0", str(SWIFT_SRC), "-o", str(out_arch)],
                     check=False)
             if r.returncode:
@@ -292,7 +298,11 @@ def native_binary(build: bool = True) -> Path | None:
     make_icns(APP_BUNDLE / "Contents" / "Resources" / "AppIcon.icns")
     make_menu_icon(APP_BUNDLE / "Contents" / "Resources")
     stamp.write_text(digest)          # before signing: the signature seals Resources/
-    sign_app(APP_BUNDLE)
+    try:
+        sign_app(APP_BUNDLE)
+    except subprocess.CalledProcessError:
+        stamp.unlink(missing_ok=True)
+        raise
     ensure_app_installed(force=True)
     return exe
 
@@ -310,10 +320,10 @@ def ensure_app_installed(force: bool = False) -> Path | None:
         return None
     try:
         if IS_MAC:
-            dest = Path.home() / "Applications" / "Blurt.app"
+            dest = INSTALLED_APP
             if dest.exists() and not force:
                 return dest
-            if not (APP_BUNDLE / "Contents" / "MacOS" / "blurt-recorder").exists():
+            if not (APP_BUNDLE / "Contents" / "MacOS" / EXECUTABLE).exists():
                 return None
             dest.parent.mkdir(exist_ok=True)
             shutil.rmtree(dest, ignore_errors=True)
@@ -322,7 +332,7 @@ def ensure_app_installed(force: bool = False) -> Path | None:
             print(f"installed standalone recorder: {dest}", file=sys.stderr, flush=True)
             return dest
         if IS_WIN:
-            lnk = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Blurt.lnk"
+            lnk = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / f"{APP_NAME}.lnk"
             if lnk.exists() and not force:
                 return lnk
             uv = shutil.which("uv")
@@ -339,10 +349,10 @@ def ensure_app_installed(force: bool = False) -> Path | None:
 
 
 def sign_app(bundle: Path) -> None:
-    """Ad-hoc sign with a designated requirement on the bundle id (not the default per-build cdhash), so macOS keeps
-    the Screen Recording / Microphone grant across rebuilds and updates instead of silently revoking it."""
-    run(["codesign", "--force", "--sign", "-", "--identifier", "dev.blurt.recorder",
-         "-r=designated => identifier \"dev.blurt.recorder\"", str(bundle)], check=False)
+    """Keep a stable app requirement across local builds; macOS still controls permission persistence."""
+    run(["codesign", "--force", "--sign", "-", "--identifier", BUNDLE_ID,
+         f'-r=designated => identifier "{BUNDLE_ID}"', str(bundle)])
+    run(["codesign", "--verify", "--strict", str(bundle)])
 
 
 def make_menu_icon(res: Path) -> None:
@@ -364,19 +374,19 @@ def make_icns(dest: Path) -> None:
         if size <= 256:
             run(["sips", "-z", str(size * 2), str(size * 2), str(ICON), "--out", str(iconset / f"icon_{size}x{size}@2x.png")],
                 check=False)
-    run(["iconutil", "-c", "icns", str(iconset), "-o", str(dest)], check=False)
+    run(["iconutil", "-c", "icns", str(iconset), "-o", str(dest)], check=TWO_HOURS)
 
 
 def inbox_dir() -> Path:
     """The default workspace's recordings (the Blurt app and --inbox): ~/Blurt/recordings."""
-    return Path.home() / "Blurt" / "recordings"
+    return Path.home() / APP_NAME / "recordings"
 
 
 def recording_roots() -> list[Path]:
     """Everywhere recordings may live: the default workspace and projects bound in the app."""
     roots = [inbox_dir()]
     for w in global_config().get("record", {}).get("workspaces", []) or []:
-        roots.append(Path(w) / ".blurt" / "sessions")
+        roots.append(Path(w) / PROJECT_FOLDER / "sessions")
     return [r for r in dict.fromkeys(roots) if r.exists()]
 
 
@@ -392,6 +402,12 @@ def tk_available() -> bool:
 
 
 def choose_engine(wanted: str | None) -> str:
+    if TWO_HOURS and IS_MAC:
+        if wanted not in (None, "native"):
+            die("Two Hours on macOS requires its native app so permissions belong to Two Hours.")
+        if not native_binary():
+            die("Two Hours needs macOS 13+ and Xcode Command Line Tools (xcode-select --install).")
+        return "native"
     if wanted:
         return wanted
     if IS_MAC and native_binary(build=True):
@@ -446,6 +462,8 @@ def cmd_start(a) -> None:
     else:
         session = new_session_dir()
     session = session.resolve()
+    if session.exists() and any(session.iterdir()):
+        die(f"Session is not empty; choose a new directory to preserve existing recordings: {session}")
     session.mkdir(parents=True, exist_ok=True)
     cfg = global_config().get("record", {})
     engine = choose_engine(a.engine or cfg.get("engine"))
@@ -454,7 +472,6 @@ def cmd_start(a) -> None:
     last = cfg.get("last_region")
     region = parse_region(a.region) or (last if a.last_region else None)
     cmd_file = session / ".cmd"
-    cmd_file.unlink(missing_ok=True)
     started = datetime.now().astimezone().isoformat(timespec="seconds")
     save_json(STATE_FILE, {"pid": os.getpid(), "session": str(session), "engine": engine, "started_at": started})
     meta = {"started_at": started, "engine": engine}
@@ -468,7 +485,6 @@ def cmd_start(a) -> None:
             result = run_headless(session, a, cfg, cmd_file)
     finally:
         STATE_FILE.unlink(missing_ok=True)
-        cmd_file.unlink(missing_ok=True)
 
     ev = result.get("event")
     if ev == "cancelled":
@@ -477,8 +493,9 @@ def cmd_start(a) -> None:
     if ev == "error":
         hint = ""
         if result.get("code") == "screen_permission":
-            hint = (" → grant Screen Recording to the app hosting this agent (System Settings → Privacy & Security → "
-                    "Screen & System Audio Recording), then restart that app.")
+            owner = APP_NAME if TWO_HOURS else "the app hosting this agent"
+            hint = (f" → grant Screen Recording to {owner} (System Settings → Privacy & Security → "
+                    "Screen & System Audio Recording), then retry recording.")
         die(f"recording failed: {result.get('code')}: {result.get('message')}{hint}")
     final = session / "recording.mp4"
     if result.get("region"):
@@ -506,6 +523,8 @@ def run_native(session: Path, a, cfg, last, region, cmd_file: Path) -> dict:
         args += ["--mic", str(a.mic or cfg.get("mic"))]
     if a.system_audio or cfg.get("system_audio"):
         args += ["--system-audio"]
+    if TWO_HOURS:
+        return run_native_app(args[1:], session, a, cmd_file)
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
     final: dict = {}
     selected = None
@@ -532,20 +551,77 @@ def run_native(session: Path, a, cfg, last, region, cmd_file: Path) -> dict:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, lambda *_: forward("stop"))
     t0 = time.time()
+    commands = CommandLog(cmd_file)
     while p.poll() is None:
-        if cmd_file.exists():
-            for c in cmd_file.read_text(encoding="utf-8").split():
-                try:
-                    forward(c)
-                except Exception:
-                    pass
-            cmd_file.unlink(missing_ok=True)
+        for c in commands.read():
+            try:
+                forward(c)
+            except Exception:
+                pass
         if a.max_minutes and time.time() - t0 > a.max_minutes * 60:
             forward("stop")
         time.sleep(0.25)
     th.join(timeout=2)
     if not final:
         final = {"event": "error", "code": f"exit_{p.returncode}", "message": "recorder exited unexpectedly"}
+    if final.get("event") == "stopped" and selected:
+        final["region"] = [int(v) for v in selected]
+    return final
+
+
+def run_native_app(args, session, options, cmd_file):
+    """Launch through LaunchServices so TCC attributes capture to the signed app."""
+    bundle = ensure_app_installed() or APP_BUNDLE
+    log_path = session / "native-events.jsonl"
+    errors_path = session / "native-stderr.log"
+    for path in (log_path, errors_path):
+        with path.open("x", encoding="utf-8"):
+            pass
+        os.chmod(path, 0o600)
+    process = subprocess.Popen(["/usr/bin/open", "-n", "-W", "-a", str(bundle),
+                                "--stdout", str(log_path), "--stderr", str(errors_path),
+                                "--args", *args, "--commands", str(cmd_file)])
+    final = {}
+    selected = None
+    def stop(*_):
+        append_command(cmd_file, "stop")
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+    started = time.monotonic()
+    stop_sent = False
+    pending = ""
+    finished = False
+    with log_path.open(encoding="utf-8") as log:
+        while True:
+            line = log.readline()
+            if line:
+                pending += line
+                if not pending.endswith("\n"):
+                    continue
+                complete, pending = pending, ""
+                try:
+                    event = json.loads(complete)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("event") == "configured":
+                    selected = event.get("region")
+                else:
+                    out(event)
+                if event.get("event") in ("stopped", "cancelled", "error"):
+                    final = event
+                continue
+            if finished:
+                break
+            if process.poll() is not None:
+                finished = True
+                continue
+            if options.max_minutes and not stop_sent and time.monotonic() - started > options.max_minutes * 60:
+                stop()
+                stop_sent = True
+            time.sleep(0.1)
+    if process.returncode != 0 or not final:
+        return {"event": "error", "code": f"launch_{process.returncode}",
+                "message": "Two Hours exited without a successful app launch and recording result; see native-stderr.log"}
     if final.get("event") == "stopped" and selected:
         final["region"] = [int(v) for v in selected]
     return final
@@ -574,11 +650,11 @@ def run_headless(session: Path, a, cfg, cmd_file: Path) -> dict:
     chime("start")
     out({"event": "recording", "engine": "ffmpeg"})
     t0 = time.time()
-    signal.signal(signal.SIGINT, lambda *_: cmd_file.write_text("stop"))
+    signal.signal(signal.SIGINT, lambda *_: append_command(cmd_file, "stop"))
     discard = False
+    commands = CommandLog(cmd_file)
     while p.poll() is None:
-        cmds = cmd_file.read_text(encoding="utf-8").split() if cmd_file.exists() else []
-        cmd_file.unlink(missing_ok=True)
+        cmds = commands.read()
         if "stop" in cmds or "discard" in cmds or (a.max_minutes and time.time() - t0 > a.max_minutes * 60):
             discard = "discard" in cmds
             break
@@ -612,8 +688,7 @@ def send(command: str) -> None:
         STATE_FILE.unlink(missing_ok=True)
         die("No active recording.")
     session = Path(state["session"])
-    with open(session / ".cmd", "a", encoding="utf-8") as fh:
-        fh.write(command + "\n")
+    append_command(session / ".cmd", command)
     if command in ("stop", "discard"):
         for _ in range(240):
             if not STATE_FILE.exists():
@@ -660,6 +735,8 @@ def cmd_install_app(_a) -> None:
 
 def cmd_build(_a) -> None:
     exe = native_binary()
+    if TWO_HOURS and IS_MAC and not exe:
+        die("Two Hours native build failed; install Xcode Command Line Tools and inspect the compiler output.")
     app = ensure_app_installed() if exe else None
     print(json.dumps({"native": str(exe) if exe else None, "app": str(app) if app else None,
                       "hint": None if exe else "needs macOS + Xcode Command Line Tools (xcode-select --install)"}))
@@ -667,6 +744,8 @@ def cmd_build(_a) -> None:
 
 def cmd_test(a) -> None:
     """Headless 3 s capture: verifies Screen Recording + Microphone permission for the hosting app."""
+    if TWO_HOURS and IS_MAC:
+        die("Use Two Hours' record button for a user-authorized permission check. The ffmpeg test checks the host app, not Two Hours.")
     out_dir = Path(a.out or Path.cwd() / ".blurt" / "test")
     out_dir.mkdir(parents=True, exist_ok=True)
     mic = pick_mic(a.mic or global_config().get("record", {}).get("mic"))
@@ -737,7 +816,7 @@ def main() -> None:
     s.add_argument("--fps", type=int)
     s.add_argument("--max-width", type=int)
     s.add_argument("--max-minutes", type=float, default=120)
-    for c in ("stop", "pause", "resume", "restart", "marker", "discard", "status", "devices", "build", "inbox", "install-app"):
+    for c in ("stop", "pause", "resume", "restart", "marker", "discard", "status", "devices", "build", "inbox", "install-app", "identity"):
         sub.add_parser(c)
     t = sub.add_parser("test")
     t.add_argument("--seconds", type=float, default=3)
@@ -748,7 +827,7 @@ def main() -> None:
     if a.cmd in ("stop", "pause", "resume", "restart", "marker", "discard"):
         return send(a.cmd)
     {"start": cmd_start, "status": cmd_status, "devices": cmd_devices, "build": cmd_build, "test": cmd_test,
-     "inbox": cmd_inbox, "install-app": cmd_install_app}[a.cmd](a)
+     "inbox": cmd_inbox, "install-app": cmd_install_app, "identity": lambda _: out(identity())}[a.cmd](a)
 
 
 if __name__ == "__main__":

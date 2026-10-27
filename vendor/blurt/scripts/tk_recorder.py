@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _common import IS_LINUX, IS_MAC, IS_WIN, ffmpeg_bin, fix_tcl_env, run  # noqa: E402
+from _common import IS_LINUX, IS_MAC, IS_WIN, CommandLog, ffmpeg_bin, fix_tcl_env, run  # noqa: E402
 
 ACCENT = "#ff5c3d"
 AMBER = "#ffc23d"
@@ -213,7 +213,7 @@ class TkRecorder:
                  last_region: list | None, region: list | None, command_file: Path, on_event):
         self.session, self.mic, self.fps, self.max_width = session, mic, fps, max_width
         self.lang, self.countdown_n, self.last_region, self.fixed_region = lang, countdown, last_region, region
-        self.command_file, self.on_event = command_file, on_event
+        self.command_log, self.on_event = CommandLog(command_file), on_event
         self.region: list[int] | None = None
         self.segments: list[dict] = []
         self.proc = None
@@ -542,11 +542,8 @@ class TkRecorder:
         if self.result:
             return
         try:
-            if self.command_file.exists():
-                cmds = self.command_file.read_text(encoding="utf-8").split()
-                self.command_file.unlink()
-                for c in cmds:
-                    self.command(c)
+            for c in self.command_log.read():
+                self.command(c)
         except Exception:
             pass
         self.root.after(250, self.poll_commands)

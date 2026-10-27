@@ -4,8 +4,10 @@ import html
 import http.client
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
+import shutil
 import tempfile
 import threading
 import unittest
@@ -51,6 +53,7 @@ class BridgeTests(unittest.TestCase):
         self.events = []
         self.review = bridge.ReviewRun(self.run, self.skill, self.events.append)
         self.review.state_file = self.root / "recording.json"
+        self.review.retention = bridge.settings.RetentionSettings(self.root / ".2hours")
         self.server = bridge.make_server(self.review)
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": .01}, daemon=True)
         self.thread.start()
@@ -79,6 +82,24 @@ class BridgeTests(unittest.TestCase):
                                              {"id": "B2", "target": {"type": "project", "title": "Project"}, "tasks": []}]}
         (self.run / "dispatch-plan.json").write_text(json.dumps(plan))
         return plan
+
+    def test_restart_on_same_port_preserves_comments_and_rejects_old_token(self):
+        self.request("/review-state", {"panel_id": "A1", "revision": 0, "comment": "保留这条意见"})
+        port, old_token = self.server.server_port, self.review.token
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+        self.review = bridge.ReviewRun(self.run, self.skill)
+        self.server = bridge.make_server(self.review, port)
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": .01}, daemon=True)
+        self.thread.start()
+        self.assertEqual(self.server.server_port, port)
+        code, body = self.request("/review-state")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)["panels"]["A1"]["comment"], "保留这条意见")
+        update = {"panel_id": "A1", "revision": 1, "comment": "恢复后保存"}
+        self.assertEqual(self.request("/review-state", update, {"X-2hours-Token": old_token})[0], 403)
+        self.assertEqual(self.request("/review-state", update)[0], 200)
 
     def test_report_is_preview_only_and_preserves_csp(self):
         with patch.object(bridge.subprocess, "Popen") as popen:
@@ -120,6 +141,11 @@ class BridgeTests(unittest.TestCase):
         with patch.object(bridge.shutil, "which", return_value=None):
             self.assertFalse(self.review.status()["can_record"])
             self.assertEqual(self.request("/record", {})[0], 503)
+
+    def test_recorder_state_is_isolated_from_independent_blurt(self):
+        with patch.dict(bridge.os.environ, {"BLURT_HOME": str(self.root / "independent-blurt")}):
+            review = bridge.ReviewRun(self.run, self.skill, self.events.append)
+        self.assertEqual(review.state_file, Path.home() / ".2hours/recorder/recording.json")
 
     def test_active_recording_is_never_stopped_or_replaced(self):
         self.review.state_file.write_text(json.dumps({"pid": 123, "session": "other"}))
@@ -267,6 +293,55 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse((self.run / "written-items.json").exists())
         self.assertEqual((self.run / "report.html").read_text(), REPORT)
 
+    def test_review_toggle_is_independent_of_empty_text_existing_text_and_voice(self):
+        revision = 0
+        for comment, voice in (("", False), ("已有文字", False), ("", True)):
+            if voice:
+                (self.run / "blurt").mkdir()
+                (self.run / "blurt/items.json").write_text(json.dumps({"items": [], "reviewed": False}))
+                self.review.state = {"state": "failed", "message": "录制错误不阻止审阅"}
+            self.assertEqual(self.request("/review-state", {"panel_id": "A1", "revision": revision, "comment": comment})[0], 200)
+            revision += 1
+            for read in (True, False):
+                code, body = self.request("/review-state", {"panel_id": "A1", "revision": revision, "read": read})
+                self.assertEqual(code, 200)
+                revision += 1
+                self.assertEqual(json.loads(body)["panels"]["A1"]["comment"], comment)
+                reloaded = bridge.ReviewRun(self.run, self.skill)
+                self.assertEqual(reloaded.review_state()["panels"]["A1"]["read"], read)
+        self.assertEqual(self.events, [])
+        for name in ("approval.json", "review-confirmation.json", "written-items.json"):
+            self.assertFalse((self.run / name).exists())
+
+    def test_settings_api_persists_without_deleting_and_requires_same_origin_token(self):
+        code, body = self.request("/settings")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)["settings"]["retention"], "keep")
+        change = {"retention": "1_week", "revision": 0}
+        self.assertEqual(self.request("/settings", change, {"X-2hours-Token": "wrong"})[0], 403)
+        code, body = self.request("/settings", change)
+        self.assertEqual(code, 200)
+        preview = json.loads(body)
+        self.assertEqual(json.loads(self.request("/settings")[1])["settings"]["retention"], "1_week")
+        self.assertEqual(self.request("/settings", change)[0], 409)
+        self.assertEqual(self.request("/cleanup", {"preview_id": preview["preview_id"]}, {"Origin": "https://example.com"})[0], 403)
+        self.assertEqual(self.request("/cleanup", {"path": str(self.run)})[0], 409)
+        self.assertEqual((self.run / "report.html").read_text(), REPORT)
+
+    def test_retention_recognizes_frozen_unified_confirmation_without_mutating_inputs(self):
+        _, body = self.write_review()
+        self.assertEqual(self.request("/approve-review", body)[0], 200)
+        target = self.review.retention.runs / "test-run"
+        shutil.copytree(self.run, target)
+        (target / "blurt/recording.mp4").write_bytes(b"video")
+        os.utime(target / "blurt/recording.mp4", (1000, 1000))
+        source = (target / "blurt/items.json").read_bytes()
+        preview = self.review.retention.save({"retention": "after_review", "revision": 0})
+        self.assertTrue(preview["files"][0]["eligible"])
+        self.assertEqual((target / "blurt/items.json").read_bytes(), source)
+        (target / "routes.json").write_text("{}")
+        self.assertFalse(self.review.retention.preview()["files"][0]["eligible"])
+
     def test_written_submission_uses_saved_text_and_requires_current_preview(self):
         self.assertEqual(self.request("/submit-comments", {"revisions": {"A1": 0}})[0], 400)
         self.request("/review-state", {"panel_id": "A1", "revision": 0, "comment": "继续调研"})
@@ -339,6 +414,66 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(json.loads((self.run / "blurt/items.json").read_text())["reviewed"])
         self.assertEqual(self.request("/approve", {"plan_id": final["approval"]["plan_id"], "batch_ids": ["B1"]})[0], 409)
         self.assertEqual(bridge.dispatch.claim(self.run, "B1")["args"]["threadId"], "thread-1")
+
+    def test_all_deferred_plan_and_status_remain_available_to_page(self):
+        _, body = self.write_review()
+        for task in body["tasks"]:
+            task["selected"] = False
+        self.assertEqual(self.request("/approve-review", body)[0], 200)
+        for endpoint in ("/plan", "/review-plan", "/dispatch-status"):
+            self.assertEqual(self.request(endpoint)[0], 200)
+        self.assertEqual(json.loads(self.request("/plan")[1])["batches"], [])
+        self.assertEqual(json.loads(self.request("/review-plan")[1])["approval"]["batch_ids"], [])
+        self.assertEqual(json.loads(self.request("/dispatch-status")[1])["batches"], [])
+
+    def test_dispatch_status_reports_sent_receipts(self):
+        _, body = self.write_review()
+        self.request("/approve-review", body)
+        bridge.dispatch.claim(self.run, "B1")
+        response = self.run / "response.json"
+        response.write_text('{"ok":true}')
+        bridge.dispatch.receipt(self.run, "B1", response, "sent")
+        self.assertEqual(json.loads(self.request("/dispatch-status")[1])["batches"][0]["status"], "sent")
+
+    def test_written_submission_requires_visible_current_opt_in_and_binds_input(self):
+        self.request("/review-state", {"panel_id": "A1", "revision": 0, "comment": "做验证"})
+        preferences = json.loads(self.request("/settings", {"dispatch_mode": "automatic", "revision": 0})[1])["settings"]
+        self.assertEqual(self.request("/submit-comments", {"revisions": {"A1": 1}})[0], 409)
+        self.assertFalse((self.run / "written-items.json").exists())
+        body = {"revisions": {"A1": 1}, "dispatch_opt_in": preferences["dispatch_consent"]["id"]}
+        self.assertEqual(self.request("/submit-comments", body)[0], 200)
+        grant = json.loads((self.run / "input-authorizations.json").read_text())["inputs"]["written-items.json"]
+        self.assertEqual(grant["sha256"], hashlib.sha256((self.run / "written-items.json").read_bytes()).hexdigest())
+        self.assertEqual(grant["items"]["W-A1"]["opt_in_id"], preferences["dispatch_consent"]["id"])
+        self.assertFalse((self.run / "approval.json").exists())
+
+    def test_existing_manual_written_item_is_not_reauthorized_by_new_auto_item(self):
+        self.request("/review-state", {"panel_id": "A1", "revision": 0, "comment": "旧意见"})
+        self.assertEqual(self.request("/submit-comments", {"revisions": {"A1": 1}})[0], 200)
+        self.review.panels.append({"id": "A2", "title": "第二项"})
+        self.request("/review-state", {"panel_id": "A2", "revision": 0, "comment": "新增任务"})
+        preferences = json.loads(self.request("/settings", {"dispatch_mode": "automatic", "revision": 0})[1])["settings"]
+        body = {"revisions": {"A1": 1, "A2": 1}, "dispatch_opt_in": preferences["dispatch_consent"]["id"]}
+        self.assertEqual(self.request("/submit-comments", body)[0], 200)
+        items = json.loads((self.run / "input-authorizations.json").read_text())["inputs"]["written-items.json"]["items"]
+        self.assertEqual(list(items), ["W-A2"])
+
+    def test_voice_mode_is_captured_at_user_start_not_at_completion(self):
+        preferences = self.review.retention.save({"dispatch_mode": "automatic", "revision": 0})["settings"]
+        process = FakeProcess([])
+        with patch.object(bridge.shutil, "which", return_value="/usr/bin/uv"), patch.object(bridge.subprocess, "Popen", return_value=process):
+            self.assertEqual(self.request("/record", {})[0], 200)
+        self.review.retention.save({"dispatch_mode": "manual", "revision": 1})
+        video = self.run / "blurt/recording.mp4"
+        video.write_bytes(b"fixture voice")
+        self.review.log.write_text(f"DONE video={video} duration=00:03\n")
+        process.done.set()
+        for thread in threading.enumerate():
+            if thread.name.endswith("(watch)"):
+                thread.join(1)
+        grant = json.loads((self.run / "input-authorizations.json").read_text())["inputs"]["blurt/recording.mp4"]
+        self.assertEqual(grant["opt_in_id"], preferences["dispatch_consent"]["id"])
+        self.assertEqual(self.review.retention.read()["dispatch_mode"], "manual")
 
     def test_combined_review_rejects_stale_sources_and_new_comment_submission_after_confirmation(self):
         _, body = self.write_review()

@@ -2,6 +2,7 @@
 """Prepare a private review run and render its host-authored evidence report."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -61,10 +62,20 @@ def init(args):
     print(json.dumps({"run": str(root.resolve()), "scope": scope, "next": "Collect evidence with Traceink and Cubox; write manifest.json and report.md"}, ensure_ascii=False))
 
 
+def recorder_identity():
+    path = ROOT / "vendor/blurt/scripts/_identity.py"
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("twohours_recorder_identity", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.identity()
+
+
 def doctor(args):
     names = ["traceink", "blurt", "cubox", "answer-me-with-html"]
     paths = {name: str(skill_dir(name)) if (skill_dir(name) / "SKILL.md").is_file() else None for name in names}
-    bins = {name: shutil.which(name) for name in ["node", "uv", "cubox-cli"]}
+    bins = {name: shutil.which(name) for name in ["node", "uv", "cubox-cli", "ffmpeg"]}
     cubox = skill_dir("cubox") / "cli/bin" / ("cubox-cli.exe" if os.name == "nt" else "cubox-cli")
     if cubox.is_file() and os.access(cubox, os.X_OK):
         bins["cubox-cli"] = str(cubox)
@@ -74,9 +85,20 @@ def doctor(args):
     missing = [name for name, path in {**paths, **bins}.items() if not path]
     if node_version and int(node_version.lstrip("v").split(".")[0]) < 20:
         missing.append("Node.js >=20")
+    recorder = recorder_identity()
+    if not recorder or not recorder["bundled"]:
+        missing.append("bundled Two Hours recorder")
+    elif any(not (Path(recorder["icon"]).parent / name).is_file()
+             for name in ("icon.png", "MenuIconTemplate.png", "MenuIconTemplate@2x.png")):
+        missing.append("Two Hours brand assets")
+    if sys.platform == "darwin":
+        bins["swiftc"] = shutil.which("swiftc")
+        if not bins["swiftc"]:
+            missing.append("Xcode Command Line Tools (xcode-select --install)")
     print(json.dumps({"skills": paths, "commands": bins, "node_version": node_version,
                       "missing": missing, "cubox_setup": ["node", str(skill_dir("cubox") / "cli/scripts/install.js")],
-                      "recording_permissions": "not_tested", "asr": "run Blurt doctor before first recording"}, ensure_ascii=False, indent=2))
+                      "recorder": recorder, "recording_permissions": "not_tested",
+                      "asr": [sys.executable, str(ROOT / "vendor/blurt/scripts/doctor.py")]}, ensure_ascii=False, indent=2))
     return 1 if missing else 0
 
 

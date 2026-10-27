@@ -24,6 +24,9 @@ MAX_BODY = 65536
 _spec = importlib.util.spec_from_file_location("twohours_dispatch", Path(__file__).with_name("dispatch.py"))
 dispatch = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dispatch)
+_settings_spec = importlib.util.spec_from_file_location("twohours_settings", Path(__file__).with_name("settings.py"))
+settings = importlib.util.module_from_spec(_settings_spec)
+_settings_spec.loader.exec_module(settings)
 
 
 def now():
@@ -81,7 +84,9 @@ class ReviewRun:
         self.event_sink = event_sink
         self.log = self.run / "recording.log"
         self.state = {"state": "existing" if self.log.exists() else "idle"}
-        self.state_file = Path(os.environ.get("BLURT_HOME", Path.home() / ".blurt")) / "recording.json"
+        self.state_file = Path.home() / ".2hours/recorder/recording.json"
+        self.retention = settings.RetentionSettings()
+        self.recording_consent = None
 
     def unchanged(self):
         if any(not (self.run / name).is_file() or (self.run / name).read_bytes() != content
@@ -95,8 +100,9 @@ class ReviewRun:
         if not shutil.which("uv"):
             missing.append("未找到 uv")
         if not (self.blurt / "scripts" / "record.py").is_file():
-            missing.append("未找到 Blurt scripts/record.py")
-        result.update(can_record=result["state"] == "idle" and not missing, dependencies=missing)
+            missing.append("未找到 Two Hours 随包录制组件")
+        result.update(can_record=result["state"] == "idle" and not missing, dependencies=missing,
+                      dispatch_mode=self.retention.read()["dispatch_mode"])
         return result
 
     def review_state(self):
@@ -137,6 +143,10 @@ class ReviewRun:
             versions = {key: value["revision"] for key, value in state["panels"].items()}
             if body.get("revisions") != versions:
                 raise Rejected("批注已改变，请刷新汇总后重新提交")
+            preferences = self.retention.read()
+            expected_opt_in = preferences["dispatch_consent"]["id"] if preferences["dispatch_consent"] else None
+            if body.get("dispatch_opt_in") != expected_opt_in:
+                raise Rejected("派发方式已变化，请刷新意见后重新提交")
             rows = [{"id": f"W-{p['id']}", "kind": "task", "title": p["title"],
                      "panel_ids": [p["id"]], "quote": state["panels"][p["id"]]["comment"],
                      "status": "confirmed", "confidence": "high", "questions": [], "answer": "",
@@ -154,8 +164,22 @@ class ReviewRun:
                 raise Rejected("本轮已有分发记录。请新建下一轮审阅，避免覆盖已发送的意见")
             submission = {"reviewed": True, "input_method": "written", "submitted_at": now(), "items": rows}
             dispatch.write_json(self.run / "written-items.json", submission)
+            dispatch.bind_input(self.run, "written-items.json", preferences["dispatch_consent"],
+                                json.loads(self.snapshot["manifest.json"]).get("targets", []), previous=previous)
         self.event_sink({"event": "comments_submitted", "count": len(rows), "file": str(self.run / "written-items.json")})
         return submission
+
+    def save_settings(self, body):
+        try:
+            return self.retention.save(body)
+        except ValueError as error:
+            raise Rejected(str(error)) from error
+
+    def cleanup_media(self, body):
+        try:
+            return self.retention.cleanup(body)
+        except ValueError as error:
+            raise Rejected(str(error)) from error
 
     def active_recording(self):
         if not self.state_file.exists():
@@ -174,19 +198,20 @@ class ReviewRun:
         except PermissionError:
             return True
         except (ValueError, OSError):
-            raise Rejected("无法核验 Blurt 录制状态，请先检查 Blurt；不会启动或停止其他录制")
+            raise Rejected("无法核验 Two Hours 录制状态，请先运行随包 doctor；不会启动或停止其他录制")
 
     def start(self):
-        with self.lock:
+        with self.lock, dispatch.locked(self.run):
             self.unchanged()
+            preferences = self.retention.read()
             if self.state["state"] != "idle":
                 raise Rejected("本轮已经启动过录制，请继续处理结果或新建运行")
             if self.active_recording():
-                raise Rejected("Blurt 已有活跃录制，请先在原录制窗口完成；本页面不会停止它")
+                raise Rejected("Two Hours 已有活跃录制，请先在原录制窗口完成；本页面不会停止它")
             uv = shutil.which("uv")
             script = self.blurt / "scripts" / "record.py"
             if not uv or not script.is_file():
-                raise Rejected("需要已安装的 uv 和 Blurt scripts/record.py", 503)
+                raise Rejected("需要 uv 和完整的 Two Hours 随包录制组件", 503)
             session = self.run / "blurt"
             if session.is_symlink() or (session.exists() and any(session.iterdir())):
                 raise Rejected("本轮 blurt 目录已有内容，请新建运行，避免覆盖录制")
@@ -213,6 +238,7 @@ class ReviewRun:
                     self.state = {"state": "failed", "message": str(error)}
                 raise Rejected(f"无法启动录制：{error}", 503)
             self.state = {"state": "recording", "started_at": now()}
+            self.recording_consent = preferences["dispatch_consent"]
             threading.Thread(target=self.watch, args=(process,), daemon=True).start()
             return dict(self.state)
 
@@ -225,12 +251,15 @@ class ReviewRun:
                 output = log.read().decode("utf-8", errors="replace")
             marker = f"DONE video={video} duration="
             if rc == 0 and marker in output and video.is_file() and not video.is_symlink():
+                with dispatch.locked(self.run):
+                    dispatch.bind_input(self.run, "blurt/recording.mp4", self.recording_consent,
+                                        json.loads(self.snapshot["manifest.json"]).get("targets", []))
                 state = {"state": "recorded", "video": str(video), "session": str(video.parent)}
             elif rc == 2:
                 state = {"state": "cancelled", "message": "录制已取消，请新建运行后重试"}
             else:
                 state = {"state": "failed", "message": f"录制未完成（退出码 {rc}），请查看 recording.log"}
-        except OSError as error:
+        except (OSError, ValueError) as error:
             state = {"state": "failed", "message": f"无法读取录制结果：{error}"}
         with self.lock:
             self.state = state
@@ -242,6 +271,9 @@ class ReviewRun:
             return None
         try:
             plan = json.loads(path.read_text())
+            if plan.get("authorization_mode") == "automatic":
+                result = dispatch.status(self.run)
+                return {**plan, "dispatch_status": result, "approved_batch_ids": []}
             for name, digest in plan.get("snapshot", {}).items():
                 if name not in (*dispatch.INPUTS, *dispatch.ITEM_INPUTS, dispatch.CONFIRMATION):
                     raise ValueError("invalid snapshot file")
@@ -249,7 +281,7 @@ class ReviewRun:
                 if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != digest:
                     return None
             ids = [batch["id"] for batch in plan["batches"]]
-            if not isinstance(plan["plan_id"], str) or not plan["plan_id"] or not ids or len(ids) != len(set(ids)):
+            if not isinstance(plan["plan_id"], str) or not plan["plan_id"] or len(ids) != len(set(ids)):
                 raise ValueError("invalid plan")
             if any(not isinstance(i, str) or not i for i in ids):
                 raise ValueError("invalid batch id")
@@ -265,6 +297,24 @@ class ReviewRun:
             return plan
         except (ValueError, KeyError, TypeError) as error:
             raise Rejected("dispatch-plan.json 无效，请重新准备分发方案") from error
+
+    def dispatch_status(self):
+        return dispatch.status(self.run) if (self.run / "dispatch-plan.json").exists() else None
+
+    def request_manual_review(self, body):
+        with self.lock, dispatch.locked(self.run):
+            plan = dispatch.read_plan(self.run)
+            if plan.get("authorization_mode") != "automatic" or body != {"plan_id": plan["plan_id"]}:
+                raise Rejected("请刷新自动派发结果后重试")
+            request = {"plan_id": plan["plan_id"], "pending": plan["pending"], "requested_at": now()}
+            path = self.run / "manual-review-request.json"
+            if path.exists():
+                previous = dispatch.read_json(path)
+                if previous.get("plan_id") == plan["plan_id"]:
+                    return previous
+            dispatch.write_json(path, request)
+        self.event_sink({"event": "manual_review_requested", **request})
+        return request
 
     def review_plan(self):
         if not (self.run / "review-plan.json").exists():
@@ -391,7 +441,7 @@ class ReviewRun:
         return {"ok": True}
 
 
-def make_server(run):
+def make_server(run, port=0):
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
             super().setup()
@@ -430,6 +480,12 @@ def make_server(run):
                     self.reply(200, run.plan())
                 elif self.path == "/review-state":
                     self.reply(200, run.review_state())
+                elif self.path == "/settings":
+                    self.reply(200, run.retention.preview())
+                elif self.path == "/dispatch-status":
+                    self.reply(200, run.dispatch_status())
+                elif self.path == "/dispatch-preferences":
+                    self.reply(200, dispatch.dispatch_preferences(run.retention.read()))
                 elif self.path == "/review-plan":
                     self.reply(200, run.review_plan())
                 elif self.path.startswith("/evidence/"):
@@ -447,7 +503,9 @@ def make_server(run):
                 self.check_origin(post=True)
                 routes = {"/record": lambda _: run.start(), "/focus": run.focus, "/approve": run.approve,
                           "/approve-review": run.approve_review,
-                          "/review-state": run.save_review, "/submit-comments": run.submit_comments}
+                          "/review-state": run.save_review, "/submit-comments": run.submit_comments,
+                          "/settings": run.save_settings, "/cleanup": run.cleanup_media}
+                routes["/request-manual-review"] = run.request_manual_review
                 if self.path not in routes:
                     raise Rejected("不存在的操作", 404)
                 if self.headers.get_content_type() != "application/json" or self.headers.get("Transfer-Encoding"):
@@ -470,7 +528,7 @@ def make_server(run):
             except (OSError, ValueError) as error:
                 self.reply(500, {"error": f"本地文件操作失败：{error}"})
 
-    return ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
 
 
 def main():
@@ -478,10 +536,13 @@ def main():
     parser.add_argument("--run", required=True, type=Path)
     parser.add_argument("--blurt-skill", type=Path, default=Path(__file__).resolve().parents[1] / "vendor/blurt")
     parser.add_argument("--open", action="store_true", help="打开报告；不会自动开始录制")
+    parser.add_argument("--port", type=int, default=0, help="恢复已有页面时使用原端口；默认自动分配")
     args = parser.parse_args()
+    if not 0 <= args.port <= 65535:
+        parser.error("--port 必须为 0–65535")
     try:
         run = ReviewRun(args.run, args.blurt_skill)
-        server = make_server(run)
+        server = make_server(run, args.port)
     except (OSError, ValueError, KeyError) as error:
         parser.exit(1, f"无法打开审阅：{error}\n")
     url = f"http://127.0.0.1:{server.server_port}/"

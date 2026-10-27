@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import IS_LINUX, IS_MAC, IS_WIN, MODELS_DIR, global_config, run, system_info  # noqa: E402
+from _identity import APP_NAME, TWO_HOURS, identity
 
 
 def recommend(info: dict) -> list[dict]:
@@ -47,6 +48,8 @@ def main():
     ff = shutil.which("ffmpeg")
     report = {
         "system": info,
+        "recorder": identity(),
+        "swiftc": shutil.which("swiftc") if IS_MAC else None,
         "ffmpeg": run([ff, "-version"]).stdout.splitlines()[0] if ff else None,
         "uv": shutil.which("uv"),
         "lark_cli": shutil.which("lark-cli"),
@@ -65,8 +68,15 @@ def main():
     if not report["asr_configured"]:
         report["todo"].append("Choose an ASR backend (see asr_recommendations) and run its setup command")
     if IS_MAC:
-        report["todo"].append("Run `record.py test` once: macOS needs Screen Recording + Microphone permission for the "
-                              "app hosting this agent (Terminal/iTerm/VS Code/Claude/Codex), then a restart of that app")
+        if TWO_HOURS:
+            if not report["swiftc"]:
+                report["todo"].append("Install Xcode Command Line Tools: xcode-select --install")
+            report["todo"].append(f"Run `record.py build` to install {APP_NAME}. Start recording only when ready; "
+                                  f"allow {APP_NAME} under Screen & System Audio Recording and Microphone, then retry. "
+                                  "This doctor does not access the screen or microphone.")
+        else:
+            report["todo"].append("Run `record.py test` once: macOS needs Screen Recording + Microphone permission for the "
+                                  "app hosting this agent (Terminal/iTerm/VS Code/Claude/Codex), then a restart of that app")
     if IS_WIN and ff and "ddagrab" not in run([ff, "-hide_banner", "-filters"], check=False).stdout:
         report["todo"].append("ffmpeg lacks ddagrab (needs ffmpeg ≥ 6); gdigrab will be used (fine, a bit heavier)")
     if IS_LINUX:

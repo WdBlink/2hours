@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import unittest
 import tempfile
 from unittest.mock import patch
@@ -35,6 +36,14 @@ class RunTests(unittest.TestCase):
                 path = root / "vendor" / name
                 path.mkdir(parents=True)
                 (path / "SKILL.md").write_text("example")
+            (root / "scripts").mkdir()
+            (root / "scripts/review_bridge.py").write_text("")
+            recorder = root / "vendor/blurt/scripts/_identity.py"
+            recorder.parent.mkdir()
+            shutil.copyfile(run.ROOT / "vendor/blurt/scripts/_identity.py", recorder)
+            (root / "assets/brand").mkdir(parents=True)
+            for name in ("icon.png", "MenuIconTemplate.png", "MenuIconTemplate@2x.png"):
+                (root / "assets/brand" / name).write_bytes(b"fixture")
             binary = root / "vendor/cubox/cli/bin" / ("cubox-cli.exe" if os.name == "nt" else "cubox-cli")
             binary.parent.mkdir(parents=True)
             binary.write_text("fixture")
@@ -43,7 +52,12 @@ class RunTests(unittest.TestCase):
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
                     self.assertEqual(run.doctor(None), 0)
-                self.assertEqual(json.loads(output.getvalue())["commands"]["cubox-cli"], str(binary))
+                report = json.loads(output.getvalue())
+                self.assertEqual(report["commands"]["cubox-cli"], str(binary))
+                self.assertEqual(report["recorder"]["name"], "Two Hours")
+                self.assertEqual(report["recorder"]["bundle_id"], "dev.twohours.recorder")
+                self.assertEqual(report["recording_permissions"], "not_tested")
+                self.assertTrue(report["asr"][-1].endswith("vendor/blurt/scripts/doctor.py"))
                 binary.unlink()
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):

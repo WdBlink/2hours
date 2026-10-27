@@ -20,7 +20,7 @@
     "upstream_differences": []
   },
   "layout": {
-    "SKILL.md, assets/, recorder/, reference/, scripts/": "unchanged installed snapshot",
+    "SKILL.md, assets/, recorder/, reference/, scripts/": "Imported upstream snapshot with the Two Hours recorder integration listed below",
     "LICENSE": "unchanged upstream root license"
   },
   "excluded": [
@@ -29,10 +29,24 @@
     "local runtime data and credentials",
     "upstream promotional media, website and tests"
   ],
-  "verified_on": "2026-10-24",
-  "version_note": "0.5.0 is the upstream plugin metadata version; the installed skill has no independent version field. All 24 installed source files match this commit.",
+  "verified_on": "2026-10-25",
+  "version_note": "0.5.0 is the upstream plugin metadata version. The original 24-file snapshot matched this commit; the current Two Hours adaptations are listed in local_modifications.",
   "verification": {
-    "installed_snapshot": "All included installed files remain byte-for-byte identical. No installed command text changed.",
-    "syntax": "All 9 Python scripts parsed successfully without producing bytecode."
+    "original_import": "The original imported snapshot matched upstream; LICENSE and upstream assets remain unchanged.",
+    "syntax": "All 10 Python scripts parse; Swift typecheck and a native arm64 build pass.",
+    "tests": "75 repository unit tests pass, including deterministic append-during-consumption checks for native, headless and Tk paths, plus a compiled test of the actual Swift command reader.",
+    "isolated_home": "Built and codesign --verify --strict verified Two Hours.app in an isolated filesystem HOME without independent Blurt files. Temporary upstream icons were test fixtures, not final branding.",
+    "final_brand": "Rebuilt and installed the final Two Hours.app from the installed skill with the approved 2h app icon and 16/32px menu templates. Strict signature verification and LaunchServices --diagnose passed; bundled menu assets match the canonical brand files.",
+    "launchservices": "open -n -W with --diagnose returned Two Hours / dev.twohours.recorder / parent_pid=1 without starting capture.",
+    "permissions": "Real clean-macOS first authorization and actual screen/microphone capture were not tested.",
+    "command_log": "All command writers append newline-delimited commands; consumers retain offsets and partial lines without deleting or truncating the log. Swift typecheck passes after this repair."
+  },
+  "local_modifications": {
+    "scripts/_identity.py": "Select bundled Two Hours identity, brand assets, and isolated storage; preserve standalone Blurt defaults.",
+    "scripts/_common.py": "Use distribution storage and a shared append-only command log reader with byte offsets and partial-line buffering.",
+    "scripts/record.py": "Build and verify a Two Hours bundle, launch it through LaunchServices, forward file commands, preserve recording events, and reject overwriting existing sessions.",
+    "scripts/doctor.py": "Report the actual recording identity and explain app-specific permissions without requesting them.",
+    "recorder/macos/BlurtRecorder.swift": "Read bundle identity and paths, use distribution labels/icons/notification names, accept command files, and support permission-free identity diagnostics.",
+    "scripts/tk_recorder.py": "Consume the shared append-only command log without unlinking files held by concurrent writers."
   }
 }

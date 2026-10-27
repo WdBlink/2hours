@@ -1,0 +1,71 @@
+{
+  "duration": 55,
+  "sample_rate": 48000,
+  "channels": 2,
+  "peak_dbfs": -4.44,
+  "rms_dbfs": -20.53,
+  "score": "Original additive synthesis; four chords and a pentatonic melody; no samples.",
+  "seed": 20261025,
+  "cues": [
+    {
+      "time": 1.2,
+      "sound": "type"
+    },
+    {
+      "time": 2.2,
+      "sound": "type"
+    },
+    {
+      "time": 3.4,
+      "sound": "enter"
+    },
+    {
+      "time": 5.5,
+      "sound": "paper"
+    },
+    {
+      "time": 6.7,
+      "sound": "paper"
+    },
+    {
+      "time": 15.9,
+      "sound": "click"
+    },
+    {
+      "time": 17.2,
+      "sound": "page"
+    },
+    {
+      "time": 23.1,
+      "sound": "page"
+    },
+    {
+      "time": 29.2,
+      "sound": "ink"
+    },
+    {
+      "time": 38.9,
+      "sound": "page"
+    },
+    {
+      "time": 43.0,
+      "sound": "click"
+    },
+    {
+      "time": 44.0,
+      "sound": "click"
+    },
+    {
+      "time": 46.0,
+      "sound": "confirm"
+    },
+    {
+      "time": 48.1,
+      "sound": "receipt"
+    },
+    {
+      "time": 49.0,
+      "sound": "receipt"
+    }
+  ]
+}

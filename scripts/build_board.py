@@ -8,6 +8,7 @@ import json
 import re
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlparse
 
 class PanelExtractor(HTMLParser):
     def __init__(self, source):
@@ -93,43 +94,75 @@ def build(run):
     cards = data['cards']
     ids = [c['id'] for c in cards]
     expected = {p['id'] for p in manifest['panels']}
-    if (not 1 <= len(cards) <= 8 or len(ids) != len(set(ids)) or set(ids) != expected
+    if (len(ids) != len(set(ids)) or set(ids) != expected
             or set(parser.panels) != {f'panel-{i}' for i in ids}
             or any(not re.fullmatch(r'[A-Za-z0-9_-]+', i) for i in ids)):
-        raise ValueError('board cards and rendered panels must match manifest, at most 8')
+        raise ValueError('board cards and rendered panels must match manifest')
     check = StaticPanelCheck()
     for panel in parser.panels.values():
         check.feed(panel)
     groups = [('需要判断', 'decide'), ('继续跟进', 'follow'), ('结果与来源', 'result')]
-    if any(c.get('lane') not in {key for _, key in groups} for c in cards):
-        raise ValueError('unknown board lane')
-    if any(sum(c['lane'] == key for c in cards) > 3 for _, key in groups):
-        raise ValueError('at most 3 cards per lane')
+    sources = {item['id']: item for item in manifest.get('sources', [])}
+    panels = {item['id']: item for item in manifest['panels']}
+    lanes = {key: label for label, key in groups}
+    areas = {}
+    for c in cards:
+        refs = [sources.get(key, {}) for key in panels[c['id']].get('source_ids', [])]
+        area = c.get('area', 'reading' if refs and all(item.get('provider') == 'cubox' for item in refs) else 'work')
+        if area not in {'work', 'reading'}:
+            raise ValueError('unknown board area')
+        if c.get('lane') not in lanes and not (area == 'reading' and 'lane' not in c):
+            raise ValueError('unknown board lane')
+        areas[c['id']] = area
     assets = Path(__file__).resolve().parent.parent / 'assets'
     css = (assets / 'board.css').read_text()
     js = (assets / 'board.js').read_text()
     digest = base64.b64encode(hashlib.sha256(js.encode()).digest()).decode()
+    mark = base64.b64encode((assets / 'brand/mark.svg').read_bytes()).decode()
+    icon = base64.b64encode((assets / 'brand/icon.png').read_bytes()).decode()
 
     def card(c):
         title = esc(c['title'])
-        return f'''<button type="button" class="review-card" data-panel="panel-{esc(c['id'])}" data-title="{title}" data-context="{esc(c.get('context', ''))}" data-read="false" aria-haspopup="dialog" aria-controls="review-window" aria-label="打开：{title}">
-<span class="paperclip" aria-hidden="true"></span><span class="card-top"><span class="card-label">{esc(c.get('label', ''))}<span class="comment-label"></span></span><span class="read-label">待审阅</span></span>
-<h2>{title}</h2><span class="card-bottom"><span class="card-value">{esc(c.get('value', ''))}<small>{esc(c.get('unit', ''))}</small></span><span class="card-state">{esc(c.get('state', ''))}</span></span></button>'''
+        area = areas[c['id']]
+        summary = c.get('summary', '')
+        refs = [sources.get(key, {}) for key in panels[c['id']].get('source_ids', [])]
+        links = []
+        if area == 'reading':
+            for item in refs:
+                if item.get('provider') != 'cubox' or not item.get('url'):
+                    continue
+                url = urlparse(item['url'])
+                if url.scheme != 'https' or not url.netloc or url.username or url.password:
+                    raise ValueError('reading source links must be absolute HTTPS URLs')
+                label = esc(item.get('title', item['id']))
+                links.append(f'<a href="{esc(item["url"])}" target="_blank" rel="noopener noreferrer" title="{label}" aria-label="原文：{label}">原文{len(links) + 1}</a>')
+        source_links = f'<div class="reading-links" aria-label="文章原文">{"".join(links)}</div>' if links else ''
+        summary_html = f'<span class="card-summary">{esc(summary)}</span>' if summary else ''
+        value = f'<span class="card-value">{esc(c.get("value", ""))}<small>{esc(c.get("unit", ""))}</small></span>' if c.get('value') not in (None, '') else ''
+        category = '文章' if area == 'reading' else lanes[c['lane']]
+        return f'''<article class="card-shell"><button type="button" class="review-card" data-panel="panel-{esc(c['id'])}" data-title="{title}" data-context="{esc(c.get('context', ''))}" data-summary="{esc(summary)}" data-value="{esc(c.get('value', ''))}" data-unit="{esc(c.get('unit', ''))}" data-state="{esc(c.get('state', ''))}" data-read="false" aria-haspopup="dialog" aria-controls="review-window" aria-label="打开：{esc(c['id'])} · {title}">
+<span class="paperclip" aria-hidden="true"></span><span class="card-top"><span class="card-label">{esc(c.get('label') or category)}<span class="comment-label"></span></span><span class="read-label">待审阅</span></span>
+<h2><span class="card-id">{esc(c['id'])}</span>{title}</h2>{summary_html}<span class="card-bottom">{value}<span class="card-state">{esc(c.get('state', ''))}</span></span></button>{source_links}</article>'''
 
-    note = f'''<aside class="desk-note" aria-label="本次报告信息"><p>{esc(data['period_label'])}</p><span>{esc(data['review_label'])}</span><span>{esc(data['coverage_label'])}</span></aside>'''
-    lanes = []
-    for label,key in groups:
-        members = [c for c in cards if c['lane'] == key]
-        lanes.append(f'<section class="lane"><h2>{label}<small>{len(members)} 份</small></h2>'+''.join(card(c) for c in members)+'</section>')
+    sections = []
+    tabs = []
+    for area, label in [('reading', 'Cubox 阅读'), ('work', 'Agent 工作')]:
+        members = [c for c in cards if areas[c['id']] == area]
+        tabs.append(f'<button type="button" data-area="{area}" aria-controls="shelf-{area}" aria-pressed="false">{label}<span>{len(members)}</span></button>')
+        empty = '<p class="empty-shelf">本轮没有阅读材料</p>' if area == 'reading' else '<p class="empty-shelf">本轮没有工作事项</p>'
+        sections.append(f'''<section class="board-shelf" id="shelf-{area}" data-area="{area}" aria-labelledby="heading-{area}"><header class="shelf-heading"><h2 id="heading-{area}">{label}</h2><span>{len(members)} 份</span></header>
+<div class="card-grid" id="cards-{area}">{''.join(card(c) for c in members) or empty}</div>
+<nav class="shelf-pages" aria-label="{label}分页" hidden><button type="button" data-step="-1" aria-controls="cards-{area}" aria-label="{label}上一页">上一页</button><span class="page-status" aria-live="polite"></span><button type="button" data-step="1" aria-controls="cards-{area}" aria-label="{label}下一页">下一页</button></nav></section>''')
     content = f'''<!doctype html><html lang="zh-CN" data-theme="shadcn" data-mode="light" data-scale="1.25"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-{digest}'; style-src 'unsafe-inline'; img-src 'self' data:; font-src data:; connect-src 'self'; form-action 'none'; base-uri 'none'">
-<title>2hours · 集中审阅</title><style>{''.join(parser.styles)}</style><style>{css}</style></head><body class="layout-lanes">
-<main class="desk"><header class="topbar"><a class="brand" href="/" aria-label="2hours 集中审阅"><svg viewBox="0 0 30 34" fill="none" aria-hidden="true"><path d="M5 2h15l6 6v24H5zM10 14h11M10 19h11M10 24h7" stroke="#557178" stroke-width="1.2"/></svg>2hours<small>集中审阅</small></a><section id="review-controls"></section></header>
-<section class="intro"><div><h1>{esc(data['title'])}</h1><p>{esc(data['subtitle'])}</p></div>{note}</section>
-<div class="board" aria-label="{len(cards)} 份审阅简报">{''.join(lanes)}</div>
-<footer class="footer"><span>曲别针＝待审阅 · 已读可在详情中标记</span><span id="review-status"></span></footer></main>
+<title>2hours · {esc(data.get("title", "集中审阅"))}</title><link rel="icon" type="image/png" href="data:image/png;base64,{icon}"><style>{''.join(parser.styles)}</style><style>{css}</style></head><body class="layout-review">
+<main class="desk"><header class="topbar"><a class="brand" href="/" aria-label="2hours 集中审阅"><img src="data:image/svg+xml;base64,{mark}" alt="" width="32" height="32"><span>Two Hours</span></a><section id="review-controls"></section></header>
+<section class="report-info" aria-label="本次报告信息"><h1>{esc(data['period_label'])}</h1><span>{esc(data['review_label'])}</span><span>{esc(data['coverage_label'])}</span></section>
+<nav class="board-nav" aria-label="阅读与工作区域">{''.join(tabs)}</nav>
+<div class="board" aria-label="{len(cards)} 份审阅简报">{''.join(sections)}</div>
+<footer class="footer"><span>曲别针表示待审阅</span><span id="review-status"></span></footer></main>
 <dialog id="review-window" class="review-window" aria-labelledby="window-label"><header class="window-bar"><h2 class="window-heading"><span id="window-label"></span><span class="window-context"></span></h2><button class="window-close" type="button" aria-label="关闭详情，返回看板" title="关闭（Esc）"><span aria-hidden="true">×</span></button></header><div class="window-content"></div></dialog>
-<dialog id="notes-window" class="review-window" aria-labelledby="notes-label"><header class="window-bar"><h2 id="notes-label" class="window-heading">集中审核<span class="window-context">原话、理解、去向 · 最后确认一次</span></h2><button class="window-close" type="button" aria-label="收起集中审核，保留草稿" title="收起（Esc）"><span aria-hidden="true">×</span></button></header><div id="notes-content" class="window-content"></div></dialog>
+<dialog id="notes-window" class="review-window" aria-labelledby="notes-label"><header class="window-bar"><h2 id="notes-label" class="window-heading"><span id="notes-title">汇总意见</span><span class="window-context">保存意见 → 提交整理 → 集中审核 · 最后确认一次</span></h2><button class="window-close" type="button" aria-label="收起意见与审核，保留草稿" title="收起（Esc）"><span aria-hidden="true">×</span></button></header><div id="notes-content" class="window-content"></div></dialog>
 <div id="panel-store" hidden>{''.join(parser.panels.values())}</div><script>{js}</script></body></html>'''
     with (run / 'report.html').open('x') as file:
         file.write(content)

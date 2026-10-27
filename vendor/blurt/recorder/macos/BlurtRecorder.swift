@@ -22,6 +22,7 @@ import ServiceManagement
 struct Options {
     var out = ""
     var events: String? = nil
+    var commands: String? = nil
     var standalone = false         // launched as an app (no --out): lives in the menu bar, records into a workspace
     var fps = 30
     var maxWidth = 2560
@@ -45,6 +46,7 @@ struct Options {
             switch a {
             case "--out": o.out = it.next() ?? o.out
             case "--events": o.events = it.next()
+            case "--commands": o.commands = it.next()
             case "--fps": o.fps = Int(it.next() ?? "") ?? o.fps
             case "--max-width": o.maxWidth = Int(it.next() ?? "") ?? o.maxWidth
             case "--countdown": o.countdown = Int(it.next() ?? "") ?? o.countdown
@@ -63,9 +65,40 @@ struct Options {
     }
 }
 
+struct CommandLog {
+    let path: String
+    private var offset: UInt64 = 0
+    private var pending = Data()
+
+    init(path: String) { self.path = path }
+
+    mutating func read() -> [String] {
+        guard let file = FileHandle(forReadingAtPath: path) else { return [] }
+        defer { try? file.close() }
+        guard (try? file.seek(toOffset: offset)) != nil, let data = try? file.readToEnd() else { return [] }
+        offset += UInt64(data.count)
+        pending.append(data)
+        var commands: [String] = []
+        while let newline = pending.firstIndex(of: 10) {
+            if let command = String(data: pending[..<newline], encoding: .utf8) {
+                commands.append(command.trimmingCharacters(in: .whitespaces).lowercased())
+            }
+            pending.removeSubrange(...newline)
+        }
+        return commands.filter { !$0.isEmpty }
+    }
+}
+
 // MARK: - Config shared with record.py (~/.blurt/config.json)
 
-let configURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".blurt/config.json")
+let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Blurt"
+let appID = Bundle.main.bundleIdentifier ?? "dev.blurt.recorder"
+let isTwoHours = appID == "dev.twohours.recorder"
+let projectFolder = Bundle.main.object(forInfoDictionaryKey: "RecorderProjectFolder") as? String ?? ".blurt"
+let recorderHome = URL(fileURLWithPath: Bundle.main.object(forInfoDictionaryKey: "RecorderHome") as? String
+    ?? ProcessInfo.processInfo.environment["BLURT_HOME"]
+    ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".blurt").path)
+let configURL = recorderHome.appendingPathComponent("config.json")
 
 func readConfig() -> [String: Any] {
     guard let d = try? Data(contentsOf: configURL), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return [:] }
@@ -517,7 +550,7 @@ final class CountdownView: NSView {
         let s = NSAttributedString(string: "\(n)", attributes: [
             .font: NSFont.systemFont(ofSize: 64, weight: .bold), .foregroundColor: NSColor.white])
         s.draw(at: NSPoint(x: r.midX - s.size().width / 2, y: r.midY - s.size().height / 2))
-        let sub = NSAttributedString(string: L("准备，开喷", "Get ready to blurt"), attributes: [
+        let sub = NSAttributedString(string: isTwoHours ? L("准备录制", "Get ready to record") : L("准备，开喷", "Get ready to blurt"), attributes: [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white])
         _ = pill(sub.string, font: NSFont.systemFont(ofSize: 13, weight: .medium), fg: .white,
                  bg: NSColor(white: 0.05, alpha: 0.72), at: NSPoint(x: bounds.midX - (sub.size().width + 24) / 2, y: r.minY - 40), pad: 12)
@@ -1360,7 +1393,7 @@ var sessionEnded: (Int32, [String: Any]) -> Void = { code, event in
 // MARK: - Workspaces (menu-bar app): where recordings go
 
 let homeDir = FileManager.default.homeDirectoryForCurrentUser
-let defaultWorkspace = homeDir.appendingPathComponent("Blurt")
+let defaultWorkspace = homeDir.appendingPathComponent(appName)
 
 func currentWorkspace() -> URL {
     if let p = recordConfig()["workspace"] as? String, FileManager.default.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
@@ -1375,7 +1408,7 @@ func knownWorkspaces() -> [URL] {
 /// Default workspace keeps recordings visible (~/Blurt/recordings); a bound project uses <repo>/.blurt/sessions.
 func sessionsRoot(for ws: URL) -> URL {
     ws.standardizedFileURL == defaultWorkspace.standardizedFileURL
-        ? ws.appendingPathComponent("recordings") : ws.appendingPathComponent(".blurt/sessions")
+        ? ws.appendingPathComponent("recordings") : ws.appendingPathComponent("\(projectFolder)/sessions")
 }
 
 func ensureDefaultWorkspace() {
@@ -1384,12 +1417,11 @@ func ensureDefaultWorkspace() {
     let guide = defaultWorkspace.appendingPathComponent("AGENTS.md")
     if !fm.fileExists(atPath: guide.path) {
         let text = """
-        # Blurt workspace
+        # \(appName) workspace
 
-        This folder is the default workspace of **blurt** (口喷鸡). Each folder in `recordings/` is one screen
-        recording with narration (`recording.mp4`, `events.jsonl`, `meta.json`). Use the `blurt` skill to turn a
-        recording into structured output (issues, ideas, notes…) — e.g. "process my latest blurt recording" /
-        "处理最新的录屏". Outputs are written next to the recording.
+        Each folder in `recordings/` is one screen recording with narration (`recording.mp4`, `events.jsonl`, `meta.json`).
+        Use the workflow at \(readConfig()["skill_dir"] as? String ?? "the installed Blurt skill")/SKILL.md to turn a recording
+        into structured output. Outputs are written next to the recording.
         """
         try? text.write(to: guide, atomically: true, encoding: .utf8)
         try? fm.createSymbolicLink(at: defaultWorkspace.appendingPathComponent("CLAUDE.md"), withDestinationURL: guide)
@@ -1477,6 +1509,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var busy = false                 // picking / counting down / recording
     var processing: [String] = []    // sessions being processed by an agent
     var statusTimer: Timer?
+    var commandTimer: Timer?
     var lastSession: URL?
 
     var resident: Bool { opts.standalone }
@@ -1502,16 +1535,26 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             startResident()
             return
         }
-        DispatchQueue.global().async {
-            while let line = readLine() {
-                let cmd = line.trimmingCharacters(in: .whitespaces).lowercased()
-                DispatchQueue.main.async { self.command(cmd) }
+        if let path = opts.commands {
+            var commands = CommandLog(path: path)
+            commandTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                for command in commands.read() {
+                    self?.command(command)
+                }
+            }
+        } else {
+            DispatchQueue.global().async {
+                while let line = readLine() {
+                    let cmd = line.trimmingCharacters(in: .whitespaces).lowercased()
+                    DispatchQueue.main.async { self.command(cmd) }
+                }
             }
         }
         // Probe permission early so the user isn't asked mid-flow.
         SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { _, err in
             DispatchQueue.main.async {
                 if let err = err {
+                    if isTwoHours { self.permissionHelp() }
                     sessionEnded(3, ["event": "error", "code": "screen_permission", "message": err.localizedDescription])
                     return
                 }
@@ -1632,7 +1675,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         item.menu = menu
-        item.autosaveName = "blurt"
+        item.autosaveName = appID
         item.isVisible = true
         statusItem = item
         refreshStatus()
@@ -1642,13 +1685,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.takeEnded(code, event)
         }
         // A second launch (double-click the app again) → start recording in the running instance
-        DistributedNotificationCenter.default().addObserver(forName: .init("dev.blurt.recorder.start"), object: nil, queue: .main) { [weak self] _ in
+        DistributedNotificationCenter.default().addObserver(forName: .init("\(appID).start"), object: nil, queue: .main) { [weak self] _ in
             guard let self = self, !self.busy else { return }
             self.startRecording(useLast: false)
         }
         if recordConfig()["welcomed"] == nil {
             setRecordConfig("welcomed", true)
-            toast(L("口喷鸡已常驻 🐔  ⌥⇧R 开始 / 结束录制 · ⌥⇧B 打开菜单", "blurt is running 🐔  ⌥⇧R start / finish · ⌥⇧B menu"))
+            toast(L("\(appName) 已常驻  ⌥⇧R 开始 / 结束录制 · ⌥⇧B 打开菜单", "\(appName) is running  ⌥⇧R start / finish · ⌥⇧B menu"))
         }
         // `--process <session dir> [--agent claude|codex]`: process an existing recording (also handy for testing)
         let args = CommandLine.arguments
@@ -1735,12 +1778,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let name = agent == "codex" ? "Codex" : "Claude Code"
         guard let bin = findExecutable(agent == "codex" ? "codex" : "claude") else {
             alert(L("没找到 \(name)", "\(name) not found"),
-                  L("口喷鸡要调用命令行里的 `\(agent == "codex" ? "codex" : "claude")`，但在你的 PATH 里没找到。装好 \(name) 命令行后再试，或者在菜单里改成「只保存」。",
-                    "blurt calls the `\(agent == "codex" ? "codex" : "claude")` command line tool, which isn't on your PATH. Install the \(name) CLI, or switch to “Just save”."))
+                  L("\(appName) 要调用命令行里的 `\(agent == "codex" ? "codex" : "claude")`，但在你的 PATH 里没找到。装好 \(name) 命令行后再试，或者在菜单里改成「只保存」。",
+                    "\(appName) calls the `\(agent == "codex" ? "codex" : "claude")` command line tool, which isn't on your PATH. Install the \(name) CLI, or switch to “Just save”."))
             return
         }
-        let prompt = L("用 blurt skill 处理这段录屏：\(dir.path)\n这是口喷鸡 App 发起的无人值守后台运行：不要提问，也不要启动审核页（App 会在你结束后自己打开）；写好 items.json 后用两三句话总结。",
-                       "Use the blurt skill to process this recording: \(dir.path)\nThis is an unattended background run started by the Blurt app: don't ask questions and don't start the review page (the app opens it when you finish); write items.json, then summarise in 2–3 sentences.")
+        let workflow = isTwoHours ? "\(readConfig()["skill_dir"] as? String ?? "")/SKILL.md" : "blurt skill"
+        let prompt = L("用 \(workflow) 处理这段录屏：\(dir.path)\n这是 \(appName) App 发起的无人值守后台运行：不要提问，也不要启动审核页（App 会在你结束后自己打开）；写好 items.json 后用两三句话总结。",
+                       "Use \(workflow) to process this recording: \(dir.path)\nThis is an unattended background run started by the \(appName) app: don't ask questions and don't start the review page (the app opens it when you finish); write items.json, then summarise in 2–3 sentences.")
         let cmd: String
         if agent == "codex" {
             // the skill needs uv's cache, the models in ~/.blurt and ffmpeg — outside the workspace sandbox
@@ -1790,15 +1834,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             b.imagePosition = .imageLeft
             b.attributedTitle = NSAttributedString(string: processing.isEmpty ? "" : " …", attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .semibold)])
-            b.toolTip = processing.isEmpty ? L("口喷鸡 · ⌥⇧R 开始录制 · ⌥⇧B 菜单", "blurt · ⌥⇧R record · ⌥⇧B menu")
-                                           : L("口喷鸡 · 正在后台整理…", "blurt · processing in the background…")
+            b.toolTip = processing.isEmpty ? L("\(appName) · ⌥⇧R 开始录制 · ⌥⇧B 菜单", "\(appName) · ⌥⇧R record · ⌥⇧B menu")
+                                           : L("\(appName) · 正在后台整理…", "\(appName) · processing in the background…")
         }
     }
 
-    /// The chicken as a monochrome template image, like every other menu-bar icon (macOS tints it).
+    /// macOS tints the distribution's monochrome menu icon.
     lazy var menuIcon: NSImage? = {
         let img = Bundle.main.image(forResource: "MenuIconTemplate")
-            ?? NSImage(systemSymbolName: "bubble.left.and.text.bubble.right", accessibilityDescription: "blurt")
+            ?? NSImage(systemSymbolName: "bubble.left.and.text.bubble.right", accessibilityDescription: appName)
         if let i = img, i.size.height > 0 {
             i.size = NSSize(width: 18 * i.size.width / i.size.height, height: 18)
             i.isTemplate = true
@@ -1831,7 +1875,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ws = currentWorkspace()
         let wsItem = NSMenuItem(title: L("工作区：", "Workspace: ") + ws.lastPathComponent, action: nil, keyEquivalent: "")
         let wsMenu = NSMenu()
-        _ = add(L("默认（~/Blurt）", "Default (~/Blurt)"), #selector(mWorkspace(_:)), to: wsMenu, obj: defaultWorkspace.path,
+        _ = add(L("默认（~/\(appName)）", "Default (~/\(appName))"), #selector(mWorkspace(_:)), to: wsMenu, obj: defaultWorkspace.path,
                 on: ws.standardizedFileURL == defaultWorkspace.standardizedFileURL)
         for w in knownWorkspaces() where w.standardizedFileURL != defaultWorkspace.standardizedFileURL {
             _ = add(w.lastPathComponent + "  ·  " + (w.path as NSString).abbreviatingWithTildeInPath, #selector(mWorkspace(_:)), to: wsMenu,
@@ -1890,7 +1934,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(.separator())
         _ = add(L("使用说明 / GitHub", "Help / GitHub"), #selector(mHelp))
-        _ = add(L("退出口喷鸡", "Quit blurt"), #selector(mQuit), key: "q")
+        _ = add(L("退出 \(appName)", "Quit \(appName)"), #selector(mQuit), key: "q")
     }
 
     @objc func mStart() { startRecording(useLast: false) }
@@ -1908,7 +1952,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.prompt = L("绑定", "Bind")
-        panel.message = L("录屏会保存到这个项目的 .blurt/sessions 里，agent 可以直接结合代码处理", "Recordings go to <project>/.blurt/sessions so your agent can process them with the code")
+        panel.message = L("录屏会保存到这个项目的 \(projectFolder)/sessions 里，agent 可以直接结合代码处理", "Recordings go to <project>/\(projectFolder)/sessions so your agent can process them with the code")
         activateApp()
         guard panel.runModal() == .OK, let u = panel.url else { return }
         var list = recordConfig()["workspaces"] as? [String] ?? []
@@ -1939,7 +1983,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() } else { try SMAppService.mainApp.register() }
         } catch { alert(L("设置失败", "Couldn't change it"), error.localizedDescription) }
     }
-    @objc func mHelp() { NSWorkspace.shared.open(URL(string: "https://github.com/AGIHunt/blurt")!) }
+    @objc func mHelp() { NSWorkspace.shared.open(URL(string: Bundle.main.object(forInfoDictionaryKey: "RecorderHelpURL") as? String ?? "https://github.com/AGIHunt/blurt")!) }
     @objc func mQuit() { NSApp.terminate(nil) }
 
     // tiny, non-blocking toast under the menu bar (no notification permission needed)
@@ -1974,17 +2018,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let a = NSAlert()
         a.messageText = L("需要「录屏」权限", "Screen Recording permission needed")
         a.informativeText = L("""
-            在 系统设置 → 隐私与安全性 → 录屏与系统录音 里打开「Blurt」，然后退出并重新打开口喷鸡（macOS 只在启动时读取权限）。
-
-            如果列表里已经是打开的：选中「Blurt」点下面的「−」删掉，再重新打开口喷鸡授权一次（旧版本留下的授权对新版本无效）。
+            在 系统设置 → 隐私与安全性 → 录屏与系统录音 里打开「\(appName)」，然后退出录制窗口并重新开始录制。
+            使用麦克风时，也需要在「麦克风」里允许「\(appName)」。
             """, """
-            Turn on “Blurt” in System Settings → Privacy & Security → Screen & System Audio Recording, then quit and reopen blurt \
-            (macOS reads the permission at launch).
-
-            Already on? Select “Blurt”, remove it with “−”, reopen blurt and allow it again (a grant from an older build doesn't carry over).
+            Allow “\(appName)” in System Settings → Privacy & Security → Screen & System Audio Recording, then close the recorder and start again.
+            To narrate, also allow “\(appName)” under Microphone.
             """)
         a.addButton(withTitle: L("打开系统设置", "Open System Settings"))
-        a.addButton(withTitle: L("退出口喷鸡", "Quit blurt"))
+        a.addButton(withTitle: L("退出 \(appName)", "Quit \(appName)"))
         a.addButton(withTitle: L("稍后", "Later"))
         activateApp()
         switch a.runModal() {
@@ -2005,13 +2046,19 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 }
 
+if CommandLine.arguments.contains("--diagnose") {
+    emit(["event": "identity", "name": appName, "bundle_id": appID, "home": recorderHome.path,
+          "pid": getpid(), "parent_pid": getppid(), "permissions": "not_tested"])
+    exit(0)
+}
+
 // A second copy of the app (double-click while it's running) just asks the running one to start recording.
 // Only for plain launches — `--process`, `--background` etc. are explicit instructions for this process.
 let plainLaunch = !CommandLine.arguments.dropFirst().contains { $0.hasPrefix("--") && !$0.hasPrefix("--lang") }
 if opts.standalone, plainLaunch, ProcessInfo.processInfo.environment["BLURT_ALLOW_MULTI"] == nil,
-   NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "dev.blurt.recorder")
+   NSRunningApplication.runningApplications(withBundleIdentifier: appID)
        .contains(where: { $0.processIdentifier != getpid() }) {
-    DistributedNotificationCenter.default().postNotificationName(.init("dev.blurt.recorder.start"), object: nil, userInfo: nil, deliverImmediately: true)
+    DistributedNotificationCenter.default().postNotificationName(.init("\(appID).start"), object: nil, userInfo: nil, deliverImmediately: true)
     exit(0)
 }
 let app = NSApplication.shared

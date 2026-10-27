@@ -10,4 +10,8 @@ vendor/cubox/cli/bin/
 runs/
 .2hours/
 *.mp4
+!promo/twohours-demo.mp4
 *.wav
+/design-demos/
+/promo/qa/
+/promo/stills/*.png

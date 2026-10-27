@@ -47,8 +47,30 @@ Blurt 原生输出放在 `blurt/items.json`，可保留 `reviewed: false` 生成
 
 ## 宿主执行与回执
 
-`dispatch.py claim --run RUN --batch ID` 检查快照与人工批准，先持久化 `sending` 再返回原生工具参数。thread 目标用 `send_message_to_thread`；project 目标用 `create_thread`，指定已核验 project ID 和 local 环境。当前宿主执行工具，脚本不伪造宿主接口。
+`dispatch.py claim --run RUN --batch ID` 检查快照与人工批准或下述有效自动授权，先持久化 `sending` 再返回原生工具参数。thread 目标用 `send_message_to_thread`；project 目标用 `create_thread`，指定已核验 project ID 和 local 环境。当前宿主执行工具，脚本不伪造宿主接口。
 
 调用成功后将原始工具响应保存为 JSON 文件，通过 `dispatch.py receipt --run RUN --batch ID --response FILE` 登记 `sent`。明确失败登记 `failed`；结果不明保留 `sending`，先查目标会话，不能盲目重发。`sent` 只表示工具确认发送，不表示任务完成。未发送批次可恢复；报告或批准后条目变化会使旧批准失效。
 
 一次运行不会自动新建定时任务，不会打开历史内容中的任意链接，不会修改 Cubox 卡片。跨会话收尾、次日结果回收仍由宿主用 read_thread / wait_threads 验证实际状态。
+
+## 可选自动派发
+
+默认人工流程不变。用户明确保存自动模式后，`settings.json` 增加 `dispatch_mode: automatic` 及 `dispatch_consent: {id, enabled_at}`。关闭后再开启会产生新 id，不设置额外的固定时间失效规则。设置本身不授权任何既有输入，也不会发送消息。
+
+桥只在用户主动提交文字或完成其主动开始的口述时写入 `input-authorizations.json`。`inputs` 按 `written-items.json` 或 `blurt/recording.mp4` 分键，保留 `authorization_mode: automatic`、`opt_in_id`、`opt_in_at`、`submitted_at`、`sha256`、文件 `signature` 及提交时已知 `targets`。音视频只在提交时流式计算一次 SHA-256，后续核验设备、inode、大小、mtime 和 ctime，避免持续读取大录音。文字还在 `items` 中按条目 ID 保留授权与条目 SHA-256；未变化的已提交条目不获得新授权。原始 Blurt `reviewed: false` 不改写，不生成假的人工 `confirmed_at`、`approval.json` 或 `review-confirmation.json`。
+
+`GET /dispatch-preferences` 返回当前模式及选择记录。文字提交必须包含与该响应一致的 `dispatch_opt_in`，人工模式为 `null`。`POST /submit-comments` 继续要求完整 revisions，模式变化或版本变化时拒绝提交。口述模式取开始录制时的用户选择；没有持久化绑定或完成后材料已变的录音只能待定，不能补造授权。
+
+宿主整理 `items` 和 `routes` 后，只有用户目的地明确且真实核验过时，才给任务写 `target_basis: explicit`。每个自动任务还须有完整 objective/acceptance、有效条目和面板引用、高 confidence、无 questions，并且不是 deleted/note。一个条目被路由到多个目标时待定，不猜测用户意图。
+
+提交后新增的目标仍可放入 `routes.targets`，不改冻结 manifest。新增目标同时要求任务的 `target_quote` 是 source_items.quote 中确实出现的原话片段，目标包含核验记录。例如下面仅为结构示例：
+
+```json
+{"key":"T2","type":"project","project_id":"observed-project-id","title":"工具返回的项目名称","source_ids":["S1"],"verification":{"tool":"list_projects","id":"observed-project-id","verified_at":"2026-10-27T09:30:00+08:00"}}
+```
+
+thread 目标对应 `list_threads` 和 thread_id。核验记录必须在这次提交之后，id 与目标一致。`verification` 是宿主真实工具调用的审计记录，填写字段本身不证明目标存在。宿主必须确认原话确实明确要求该项目或会话，不能用关键词猜测补齐；代码只核验引用与记录的一致性。缺少目标依据、原话、核验、授权或存在歧义的任务单独 pending，其余有效任务可形成批次。
+
+推荐执行顺序为 `prepare-auto --run RUN`、`status --run RUN`，再对尚未领取的批次执行既有 `claim`、真实宿主工具及 `receipt`。自动关闭或没有有效当前选择时，prepare-auto 返回错误且不创建计划；已开启但输入无授权时可以生成仅含 pending 的空计划。自动计划明确带 `authorization_mode: automatic`、`opt_in_id`、`pending` 和 `review_id`，snapshot 绑定原始输入、路由与授权文件，plan_id 绑定这些内容。提示词明确其未经逐项人工审核。`claim` 在设置锁及运行锁内重新核验模式、选择标识和材料，不能把产品记录当作绕过原生宿主授权的依据。
+
+`GET /dispatch-status` 提供真实 sending/sent/failed/pending 状态。关闭自动后仍可登记已经领取批次的真实回执；结果不明保留 sending，恢复时先核验目标，不重复 claim。`POST /request-manual-review {plan_id}` 持久化待定项请求并输出 `manual_review_requested` 事件，不发送任务。无派发尝试时，宿主可运行 prepare-review，旧自动计划移除并进入原人工表单；已有派发尝试时原计划不可改，只把 pending 带到新运行人工确认，防止已发项重发。

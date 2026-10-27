@@ -14,10 +14,37 @@ IS_MAC = sys.platform == "darwin"
 IS_WIN = os.name == "nt"
 IS_LINUX = sys.platform.startswith("linux")
 
-BLURT_HOME = Path(os.environ.get("BLURT_HOME", Path.home() / ".blurt"))
+from _identity import PROJECT_FOLDER, RECORDER_HOME
+
+BLURT_HOME = RECORDER_HOME
 MODELS_DIR = BLURT_HOME / "models"
 GLOBAL_CONFIG = BLURT_HOME / "config.json"
 STATE_FILE = BLURT_HOME / "recording.json"
+
+
+class CommandLog:
+    """Consume complete commands without unlinking a file that writers may still hold open."""
+    def __init__(self, path: Path):
+        self.path = path
+        self.offset = 0
+        self.pending = b""
+
+    def read(self) -> list[str]:
+        try:
+            with self.path.open("rb") as stream:
+                stream.seek(self.offset)
+                data = stream.read()
+        except FileNotFoundError:
+            return []
+        self.offset += len(data)
+        lines = (self.pending + data).split(b"\n")
+        self.pending = lines.pop()
+        return [line.decode("utf-8").strip() for line in lines if line.strip()]
+
+
+def append_command(path: Path, command: str) -> None:
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(command + "\n")
 
 
 def ensure_utf8_stdio() -> None:
@@ -106,7 +133,7 @@ def update_global_config(patch: dict) -> dict:
 
 def new_session_dir(root: Path | None = None) -> Path:
     root = Path(root or Path.cwd())
-    d = root / ".blurt" / "sessions" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    d = root / PROJECT_FOLDER / "sessions" / datetime.now().strftime("%Y%m%d-%H%M%S")
     d.mkdir(parents=True, exist_ok=True)
     return d
 
