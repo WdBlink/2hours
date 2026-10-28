@@ -2,7 +2,7 @@
 
 # Two Hours · 2hours
 
-![Version](https://img.shields.io/badge/version-0.3.1-CC785C)
+![Version](https://img.shields.io/badge/version-0.3.2-CC785C)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 把散落的工作进展和阅读材料放进一份报告，集中审阅、口述圈画，再一次确认任务理解与执行去向。Agent 将独立任务送回各自的 Codex 会话，让工作继续推进。
@@ -70,7 +70,7 @@ Two Hours 使用独立的 `~/.2hours/recorder/` 保存录制配置、模型和�
 
 版本更新通过 Git tag 管理：在确认本地改动已保留后 `git fetch --tags`，再切换到选定版本。**唯一维护源是本仓库**，安装目录是运行副本；运行资料独立存于 `~/.2hours/runs/`。
 
-当前发布版为 [`v0.3.1`](https://github.com/WdBlink/2hours/releases/tag/v0.3.1)。已有 Git 安装在保留本地改动后执行 `git fetch --tags` 和 `git switch --detach v0.3.1`。从发布压缩包安装时，将代码解压到新的目录后再替换安装；不要覆盖 `~/.2hours/` 中的运行资料。
+当前发布版为 [`v0.3.2`](https://github.com/WdBlink/2hours/releases/tag/v0.3.2)。已有 Git 安装在保留本地改动后执行 `git fetch --tags` 和 `git switch --detach v0.3.2`。从发布压缩包安装时，将代码解压到新的目录后再替换安装；不要覆盖 `~/.2hours/` 中的运行资料。
 
 ## 无私人数据的预览
 

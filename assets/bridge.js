@@ -98,7 +98,7 @@
     const show = visible => {tip.hidden = !visible; button.setAttribute("aria-expanded", String(visible)); if (visible) {const rect = button.getBoundingClientRect(); tip.style.left = `${Math.max(24, Math.min(rect.left, innerWidth - 304))}px`; tip.style.top = `${Math.min(rect.bottom + 8, innerHeight - 180)}px`;}};
     wrap.addEventListener("pointerenter", () => show(true)); wrap.addEventListener("pointerleave", () => {if (!wrap.contains(document.activeElement)) show(false);});
     button.addEventListener("focus", () => show(true)); button.addEventListener("blur", () => show(false)); button.addEventListener("click", () => show(true));
-    button.addEventListener("keydown", event => {if (event.key === "Escape") {event.stopPropagation(); show(false);}});
+    button.addEventListener("keydown", event => {if (event.key === "Escape" && !tip.hidden) {event.preventDefault(); event.stopPropagation(); show(false);}});
     wrap.append(button, tip); return wrap;
   }
   window.addEventListener("resize", () => {document.querySelectorAll(".info-help").forEach(wrap => {wrap.querySelector(".info-tip").hidden = true; wrap.querySelector("button").setAttribute("aria-expanded", "false");});});
