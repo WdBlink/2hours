@@ -17,13 +17,13 @@
     .panel-read-status {font: 12px/1.5 system-ui; color: var(--ink-soft, #555); margin: 0 0 8px; min-height: 1.5em;}
     #twohours-settings {width:min(900px,calc(100vw - 32px));height:min(720px,calc(100dvh - 32px));max-height:calc(100dvh - 32px);box-sizing:border-box;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font:14px/1.65 system-ui;overflow:hidden;}
     #twohours-settings[open] {display:flex;flex-direction:column;}
-    #twohours-settings::backdrop {background:#342e2570;}
+    #twohours-settings::backdrop {background:#1c253270;}
     #twohours-settings h2 {margin:0;font-size:20px;font-weight:600;}
     #twohours-settings h3 {margin:0 0 20px;font-size:20px;font-weight:550;}
     #twohours-settings button, #twohours-settings select {font:inherit;color:inherit;background:var(--paper-raised);border:1px solid var(--line);border-radius:4px;padding:9px 12px;}
     #twohours-settings button:disabled {opacity: .55;}
     #twohours-settings>header {display:flex;justify-content:space-between;align-items:center;padding:18px 24px;border-bottom:1px solid var(--line-2);}
-    .retention-actions {display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:16px 0;}
+    .retention-actions {display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 18px;}
     #twohours-settings .settings-layout {display:grid;grid-template-columns:160px minmax(0,1fr);flex:1;min-height:0;}
     #twohours-settings .settings-nav {padding:20px 12px;background:var(--paper-muted);border-right:1px solid var(--line-2);}
     #twohours-settings .settings-nav button {display:flex;align-items:center;gap:10px;width:100%;margin:0 0 6px;background:transparent;border-color:transparent;text-align:left;}
@@ -32,13 +32,28 @@
     #twohours-settings .settings-page>p {color:var(--ink-2);}
     #twohours-settings .settings-status {min-height:24px;margin:0;padding:12px 24px;border-top:1px solid var(--line-2);background:var(--paper-raised);}
     #twohours-settings label {display: block; margin-bottom: 6px;}
-    #twohours-settings select {max-width:100%;min-height:44px;appearance:auto;padding-right:24px;}
+    .settings-select {position:relative;display:inline-flex;max-width:100%;}
+    #twohours-settings .settings-select select {width:220px;max-width:100%;min-height:44px;appearance:none;padding:9px 54px 9px 14px;cursor:pointer;}
+    .settings-select::after {content:"";position:absolute;right:0;top:0;bottom:0;width:42px;border-left:1px solid var(--line);background:center / 14px 14px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23555e6b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");pointer-events:none;}
+    #twohours-settings .retention-actions button {min-height:44px;padding:9px 16px;color:var(--accent);}
+    #twohours-settings .retention-actions .settings-save {background:var(--accent);border-color:var(--accent);color:var(--paper-raised);}
+    #twohours-settings .retention-actions .settings-save:hover:not(:disabled) {background:var(--accent);filter:brightness(1.1);}
+    #twohours-settings .retention-details {border:1px solid var(--line);border-radius:4px;background:var(--paper-raised);margin:0 0 18px;}
+    #twohours-settings .retention-details summary {display:flex;align-items:center;gap:10px;min-height:44px;padding:0 14px;cursor:pointer;color:var(--accent);list-style:none;}
+    #twohours-settings .retention-details summary::-webkit-details-marker {display:none;}
+    #twohours-settings .retention-details summary::before {content:"";width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform 160ms;}
+    #twohours-settings .retention-details[open] summary::before {transform:rotate(45deg);}
+    #twohours-settings .retention-details[open] summary {border-bottom:1px solid var(--line-2);}
+    #twohours-settings .retention-details ul {margin:0;padding:14px 24px 14px 38px;color:var(--ink-2);}
+    #twohours-settings .retention-details li+li {margin-top:8px;}
+    #twohours-settings .retention-scope {font-size:13px;}
     #twohours-settings li, #twohours-settings p {overflow-wrap: anywhere;}
     .info-help {display:inline-flex;vertical-align:middle;margin-left:6px;}
-    #twohours-settings button.info-button {width:28px;height:28px;min-height:28px;padding:4px;border:0;background:transparent;color:var(--ink-3);}
-    .info-tip {position:fixed;z-index:200;box-sizing:border-box;width:280px;max-width:calc(100vw - 48px);padding:12px 14px;background:var(--ink);color:var(--paper-raised);border-radius:5px;box-shadow:0 6px 24px #342e2520;font:13px/1.6 system-ui;}
+    #twohours-settings button.info-button {width:28px;height:28px;min-height:28px;padding:6px;border:0;background:transparent;color:var(--danger, #b44942);}
+    .info-tip {position:fixed;z-index:200;box-sizing:border-box;width:280px;max-width:calc(100vw - 48px);padding:12px 14px;background:var(--ink);color:var(--paper-raised);border-radius:5px;box-shadow:0 6px 24px #20283020;font:13px/1.6 system-ui;}
     body.layout-review #twohours-bar .toolbar-icon {display:grid;place-items:center;width:44px;min-width:44px;height:44px;padding:10px;border:1px solid var(--line);border-radius:4px;background:var(--paper);}
     .toolbar-icon svg,.settings-nav svg,.info-button svg,#twohours-settings .panel-icon svg {width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;}
+    #twohours-settings .info-button svg {width:16px;height:16px;}
     .toolbar-icon:hover,#twohours-settings button:hover:not(:disabled) {background:var(--accent-soft);}
     .toolbar-icon:focus-visible,#twohours-settings button:focus-visible,#twohours-settings select:focus-visible {outline:2px solid var(--accent);outline-offset:3px;}
     @media(max-width:540px) {#twohours-settings .settings-layout {grid-template-columns:108px minmax(0,1fr)}#twohours-settings .settings-nav {padding:16px 6px}#twohours-settings .settings-nav button {padding:9px 6px;gap:6px}#twohours-settings .settings-page {padding:20px 16px}#twohours-settings>header {padding:16px}#twohours-settings .settings-status {padding:10px 16px}}
@@ -69,6 +84,9 @@
   function actionLabel(element, label, path) {
     element.replaceChildren(iconButton(label, path).firstElementChild);
     element.setAttribute("aria-label", label); element.title = label; element.classList.add("toolbar-icon");
+  }
+  function selectControl(select) {
+    const wrap = node("span"); wrap.className = "settings-select"; wrap.append(select); return wrap;
   }
   let helpCount = 0;
   function infoHelp(label, text) {
@@ -154,8 +172,8 @@
       const save = node("button", "保存派发方式"); save.type = "button";
       select.addEventListener("change", () => {settingsStatus.textContent = "派发方式尚未保存。";});
       save.addEventListener("click", async () => {save.disabled = true; select.disabled = true; settingsStatus.textContent = "正在保存派发方式…"; try {showSettings(await request("/settings", {dispatch_mode: select.value, revision: preview.settings.revision})); settingsStatus.textContent = "派发方式已保存；本次设置操作没有发送任务。";} catch (error) {settingsStatus.textContent = `保存尚未确认：${error.message}`; save.disabled = false; select.disabled = false;}});
-      const actions = node("div"); actions.className = "retention-actions"; actions.append(save);
-      page.append(heading, label, select, scope, current, actions); return;
+      const actions = node("div"); actions.className = "retention-actions"; save.classList.add("settings-save"); actions.append(save);
+      page.append(heading, label, selectControl(select), scope, current, actions); return;
     }
     const heading = node("h3", "录音留存"); heading.append(infoHelp("了解留存计算", "到期从文件最后修改时间计算。“处理并完成审核后”也会保护未处理、未审核及正在录制的材料。卡片已审阅不等于录音审核完成。"));
     page.append(heading, node("p", "默认一直保留。保存策略不会删除文件；清理仅在下方明确执行，不会后台自动运行。"));
@@ -165,14 +183,15 @@
     select.value = preview.settings.retention;
     const save = node("button", "保存设置"); save.type = "button";
     const reload = node("button", "刷新清理预览"); reload.type = "button";
-    const actions = node("div"); actions.className = "retention-actions"; actions.append(select, save, reload);
-    page.append(label, actions,
-      node("p", `清理范围：${preview.scope} 内各运行的 blurt 目录，仅 ${preview.media_names.join("、")}。不会清理外部项目、截图、转写、报告或审核记录。`),
-      node("p", "未处理、未完成审核及正在录制的材料始终受保护。"));
+    const actions = node("div"); actions.className = "retention-actions"; save.classList.add("settings-save"); actions.append(selectControl(select), save, reload);
+    const scope = node("p", `清理范围：${preview.scope} 内各运行的 blurt 目录，仅 ${preview.media_names.join("、")}。未处理、未完成审核及正在录制的材料受保护。`);
+    scope.className = "retention-scope";
+    scope.append(infoHelp("了解清理范围", "不会清理外部项目、截图、转写、报告或审核记录。"));
+    page.append(label, actions, scope);
     for (const warning of preview.warnings) page.append(node("p", warning));
     const eligible = preview.files.filter(file => file.eligible);
     page.append(node("h3", `清理预览 · ${eligible.length} 个文件 · ${fileSize(preview.eligible_bytes)}`));
-    const details = node("details"); details.open = true; details.append(node("summary", `全部 ${preview.files.length} 个文件及保护原因`));
+    const details = node("details"); details.className = "retention-details"; details.open = true; details.append(node("summary", `全部 ${preview.files.length} 个文件及保护原因`));
     const list = node("ul");
     for (const file of preview.files) {
       const expires = file.expires_at ? `到期 ${new Date(file.expires_at).toLocaleString()}` : "无到期时间";

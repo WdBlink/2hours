@@ -2,7 +2,7 @@
 
 # Two Hours · 2hours
 
-![Version](https://img.shields.io/badge/version-0.3.0-CC785C)
+![Version](https://img.shields.io/badge/version-0.3.1-CC785C)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 把散落的工作进展和阅读材料放进一份报告，集中审阅、口述圈画，再一次确认任务理解与执行去向。Agent 将独立任务送回各自的 Codex 会话，让工作继续推进。
@@ -70,7 +70,7 @@ Two Hours 使用独立的 `~/.2hours/recorder/` 保存录制配置、模型和�
 
 版本更新通过 Git tag 管理：在确认本地改动已保留后 `git fetch --tags`，再切换到选定版本。**唯一维护源是本仓库**，安装目录是运行副本；运行资料独立存于 `~/.2hours/runs/`。
 
-当前发布版为 [`v0.3.0`](https://github.com/WdBlink/2hours/releases/tag/v0.3.0)。已有 Git 安装在保留本地改动后执行 `git fetch --tags` 和 `git switch --detach v0.3.0`。从发布压缩包安装时，将代码解压到新的目录后再替换安装；不要覆盖 `~/.2hours/` 中的运行资料。
+当前发布版为 [`v0.3.1`](https://github.com/WdBlink/2hours/releases/tag/v0.3.1)。已有 Git 安装在保留本地改动后执行 `git fetch --tags` 和 `git switch --detach v0.3.1`。从发布压缩包安装时，将代码解压到新的目录后再替换安装；不要覆盖 `~/.2hours/` 中的运行资料。
 
 ## 无私人数据的预览
 
@@ -106,7 +106,7 @@ node --test vendor/traceink/test/*.test.mjs
 
 | 项目 | 锁定版本 / 提交 | 用途 |
 | --- | --- | --- |
-| [Blurt](https://github.com/AGIHunt/blurt) | 0.5.0 · `53171c4` | 录屏、口述转录与圈画证据 |
+| [Blurt](https://github.com/AGIHunt/blurt) | 0.5.0 · `53171c4`；选择性吸收 1.0.2 · `9b4a0e1` | 录屏、口述转录与圈画证据 |
 | [Traceink](https://github.com/WdBlink/traceink) | 0.2.0 · `ecadc29` | 会话证据与工作线阅读合同 |
 | [Cubox CLI](https://github.com/OLCUBO/cubox-cli) | 1.0.10 · `6eb4e7b` | 收藏与正文读取 |
 | [answer-me-with-html](https://github.com/QingYunA/answer-me-with-html) | 0.5.7 · `fa42f5c` | Markdown 排版与 HTML renderer |

@@ -21,6 +21,76 @@ spec.loader.exec_module(record)
 
 
 class RecorderTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("swiftc") and shutil.which("ffprobe")
+                         and shutil.which("ffmpeg"), "requires macOS Swift and ffmpeg")
+    def test_native_writer_produces_decodable_finished_and_interrupted_video(self):
+        source = (ROOT / "vendor/blurt/recorder/macos/BlurtRecorder.swift").read_text()
+        setup = source[source.index("        let url = URL(fileURLWithPath: opts.out)"):
+                       source.index("        vIn.expectsMediaDataInRealTime = true")]
+        audio_setup = source[source.index("        if opts.mic {\n            let a = AVAssetWriterInput"):
+                             source.index("        if sys {  // kept as its own track")]
+        harness = r'''import Foundation
+import AVFoundation
+import CoreVideo
+import CoreMedia
+let opts = (out: CommandLine.arguments[2], fps: 10, mic: true)
+let W = 320, H = 240
+var writer: AVAssetWriter!
+var vIn: AVAssetWriterInput!
+var aIn: AVAssetWriterInput?
+__SETUP__
+vIn.expectsMediaDataInRealTime = true
+writer.add(vIn)
+__AUDIO_SETUP__
+let asset = AVURLAsset(url: URL(fileURLWithPath: CommandLine.arguments[1]))
+let reader = try AVAssetReader(asset: asset)
+let video = AVAssetReaderTrackOutput(track: asset.tracks(withMediaType: .video)[0], outputSettings:
+    [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange])
+let audio = AVAssetReaderTrackOutput(track: asset.tracks(withMediaType: .audio)[0], outputSettings:
+    [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48000, AVNumberOfChannelsKey: 1])
+reader.add(video); reader.add(audio)
+precondition(reader.startReading() && writer.startWriting())
+writer.startSession(atSourceTime: .zero)
+var v = video.copyNextSampleBuffer(), a = audio.copyNextSampleBuffer()
+while v != nil || a != nil {
+    let useVideo = v != nil && (a == nil || CMTimeCompare(CMSampleBufferGetPresentationTimeStamp(v!),
+                                                           CMSampleBufferGetPresentationTimeStamp(a!)) <= 0)
+    let input = useVideo ? vIn! : aIn!
+    while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.002) }
+    if useVideo { precondition(input.append(v!)); v = video.copyNextSampleBuffer() }
+    else { precondition(input.append(a!)); a = audio.copyNextSampleBuffer() }
+}
+if CommandLine.arguments[3] == "interrupt" { Thread.sleep(forTimeInterval: 2); exit(0) }
+vIn.markAsFinished(); aIn!.markAsFinished()
+let done = DispatchSemaphore(value: 0)
+writer.finishWriting { done.signal() }
+precondition(done.wait(timeout: .now() + 20) == .success && writer.status == .completed)
+'''.replace("__SETUP__", setup).replace("__AUDIO_SETUP__", audio_setup)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main.swift").write_text(harness)
+            compiled = subprocess.run([shutil.which("swiftc"), "-suppress-warnings", str(root / "main.swift"),
+                                       "-o", str(root / "check")], text=True, capture_output=True, timeout=30)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            fixture = root / "source.mp4"
+            subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "color=s=320x240:r=10:d=15",
+                            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=15",
+                            "-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-c:a", "aac", str(fixture)],
+                           check=True, timeout=30)
+            for mode in ("interrupt", "finished"):
+                video = root / f"{mode}.mp4"
+                subprocess.run([str(root / "check"), str(fixture), str(video), mode], check=True, timeout=30)
+                probe = subprocess.check_output([shutil.which("ffprobe"), "-v", "error", "-show_entries",
+                                                 "format=duration", "-of", "default=nw=1:nk=1", str(video)], text=True)
+                duration = float(probe.strip())
+                self.assertGreaterEqual(duration, 4 if mode == "interrupt" else 14.9)
+                tracks = json.loads(subprocess.check_output([shutil.which("ffprobe"), "-v", "error", "-show_entries",
+                    "stream=codec_type,duration", "-of", "json", str(video)], text=True))["streams"]
+                self.assertEqual({track["codec_type"] for track in tracks}, {"video", "audio"})
+                self.assertTrue(all(float(track["duration"]) >= 4 for track in tracks))
+                subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-i", str(video), "-f", "null", "-"],
+                               check=True, timeout=30)
+
     def test_bundle_and_signing_use_two_hours_identity(self):
         info = plistlib.loads(record.INFO_PLIST.encode())
         self.assertEqual(info["CFBundleIdentifier"], "dev.twohours.recorder")

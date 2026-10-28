@@ -1017,6 +1017,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
         try? FileManager.default.removeItem(at: url)
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         writer.shouldOptimizeForNetworkUse = false  // true leaves .sb-* temp files if we exit right after
+        writer.movieFragmentInterval = CMTime(seconds: 4, preferredTimescale: 600)
         vIn = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: W, AVVideoHeightKey: H,
             AVVideoCompressionPropertiesKey: [
@@ -1024,6 +1025,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
                 AVVideoExpectedSourceFrameRateKey: opts.fps,
                 AVVideoMaxKeyFrameIntervalKey: opts.fps * 2,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                AVVideoAllowFrameReorderingKey: false,
             ],
         ])
         vIn.expectsMediaDataInRealTime = true

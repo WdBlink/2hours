@@ -46,7 +46,17 @@
     "scripts/_common.py": "Use distribution storage and a shared append-only command log reader with byte offsets and partial-line buffering.",
     "scripts/record.py": "Build and verify a Two Hours bundle, launch it through LaunchServices, forward file commands, preserve recording events, and reject overwriting existing sessions.",
     "scripts/doctor.py": "Report the actual recording identity and explain app-specific permissions without requesting them.",
-    "recorder/macos/BlurtRecorder.swift": "Read bundle identity and paths, use distribution labels/icons/notification names, accept command files, and support permission-free identity diagnostics.",
+    "recorder/macos/BlurtRecorder.swift": "Read bundle identity and paths, use distribution labels/icons/notification names, accept command files, and support permission-free identity diagnostics. Selectively port 1.0.2 four-second movie fragments and disabled frame reordering; this does not implement automatic restart or stitching.",
     "scripts/tk_recorder.py": "Consume the shared append-only command log without unlinking files held by concurrent writers."
+  },
+  "upstream_inspected": {
+    "version": "1.0.2",
+    "commit": "9b4a0e1f0119e086637d027bfeab7fbcc431fdd3",
+    "verified_on": "2026-10-28",
+    "scope": "Selectively reviewed upstream recording and annotation changes; the bundled baseline remains 0.5.0.",
+    "selected_changes": [
+      "Use four-second movie fragments and disable video frame reordering, as in the upstream macOS recorder, to improve recoverability after interrupted writing."
+    ],
+    "not_imported": "The 1.0.2 multi-module application, live/snap/ink flows, segmented writer recovery and standalone review require new protocols and dependencies; they do not replace the existing Two Hours capture and unified review integration."
   }
 }

@@ -44,6 +44,8 @@ class BoardTests(unittest.TestCase):
         self.assertIn(".approval-body", result)
         self.assertIn("connect-src 'self'", result)
         self.assertIn("data:image/svg+xml;base64," + base64.b64encode((SCRIPT.parents[1] / "assets/brand/mark.svg").read_bytes()).decode(), result)
+        self.assertIn("data:image/svg+xml;base64," + base64.b64encode((SCRIPT.parents[1] / "assets/desk-keyboard.svg").read_bytes()).decode(), result)
+        self.assertIn('<aside class="desk-note"><h1>Yesterday</h1><span>Today</span><span>One session</span></aside>', result)
         self.assertIn('rel="icon" type="image/png" href="data:image/png;base64,', result)
         with self.assertRaisesRegex(ValueError, "already frozen"):
             board.build(self.run)

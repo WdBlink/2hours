@@ -120,6 +120,7 @@ def build(run):
     digest = base64.b64encode(hashlib.sha256(js.encode()).digest()).decode()
     mark = base64.b64encode((assets / 'brand/mark.svg').read_bytes()).decode()
     icon = base64.b64encode((assets / 'brand/icon.png').read_bytes()).decode()
+    keyboard = base64.b64encode((assets / 'desk-keyboard.svg').read_bytes()).decode()
 
     def card(c):
         title = esc(c['title'])
@@ -157,7 +158,7 @@ def build(run):
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-{digest}'; style-src 'unsafe-inline'; img-src 'self' data:; font-src data:; connect-src 'self'; form-action 'none'; base-uri 'none'">
 <title>2hours · {esc(data.get("title", "集中审阅"))}</title><link rel="icon" type="image/png" href="data:image/png;base64,{icon}"><style>{''.join(parser.styles)}</style><style>{css}</style></head><body class="layout-review">
 <main class="desk"><header class="topbar"><a class="brand" href="/" aria-label="2hours 集中审阅"><img src="data:image/svg+xml;base64,{mark}" alt="" width="32" height="32"><span>Two Hours</span></a><section id="review-controls"></section></header>
-<section class="report-info" aria-label="本次报告信息"><h1>{esc(data['period_label'])}</h1><span>{esc(data['review_label'])}</span><span>{esc(data['coverage_label'])}</span></section>
+<section class="report-info" aria-label="本次报告信息"><img class="desk-keyboard" src="data:image/svg+xml;base64,{keyboard}" alt="" aria-hidden="true"><aside class="desk-note"><h1>{esc(data['period_label'])}</h1><span>{esc(data['review_label'])}</span><span>{esc(data['coverage_label'])}</span></aside></section>
 <nav class="board-nav" aria-label="阅读与工作区域">{''.join(tabs)}</nav>
 <div class="board" aria-label="{len(cards)} 份审阅简报">{''.join(sections)}</div>
 <footer class="footer"><span>曲别针表示待审阅</span><span id="review-status"></span></footer></main>
