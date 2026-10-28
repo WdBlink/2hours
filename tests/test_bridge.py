@@ -209,6 +209,32 @@ class BridgeTests(unittest.TestCase):
             self.review.watch(process)
             self.assertEqual(self.events[-1]["event"], expected)
 
+    def test_recovered_recording_keeps_done_gate_and_reports_warning(self):
+        video = self.run / "blurt/recording.mp4"
+        video.parent.mkdir()
+        video.write_bytes(b"recovered video")
+        warning = "录制已恢复，但结尾可能丢失。麦克风口述是否被录到尚未核验。"
+        (video.parent / "meta.json").write_text(json.dumps({"recovered": True, "incomplete": True, "warning": warning}))
+        consent = self.review.retention.save({"dispatch_mode": "automatic", "revision": 0})["settings"]["dispatch_consent"]
+        self.review.recording_consent = consent
+        self.review.log.write_text(f"DONE video={video} duration=00:03\n")
+        process = FakeProcess([])
+        process.done.set()
+        self.review.watch(process)
+        self.assertEqual(self.events[-1]["event"], "recorded")
+        self.assertTrue(self.events[-1]["incomplete"])
+        self.assertEqual(self.events[-1]["message"], warning)
+        grant = json.loads((self.run / "input-authorizations.json").read_text())["inputs"]["blurt/recording.mp4"]
+        self.assertEqual(grant["opt_in_id"], consent["id"])
+        (video.parent / "meta.json").write_text(json.dumps({"incomplete": True, "warning": warning}))
+        self.review.watch(process)
+        self.assertFalse(self.events[-1]["recovered"])
+        self.assertTrue(self.events[-1]["incomplete"])
+        self.assertEqual(self.events[-1]["message"], warning)
+        self.review.log.write_text("recovery did not finish\n")
+        self.review.watch(process)
+        self.assertEqual(self.events[-1]["event"], "failed")
+
     def test_approval_binds_plan_and_selected_batches(self):
         self.write_plan()
         self.assertEqual(self.request("/plan")[0], 200)

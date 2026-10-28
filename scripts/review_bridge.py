@@ -251,10 +251,20 @@ class ReviewRun:
                 output = log.read().decode("utf-8", errors="replace")
             marker = f"DONE video={video} duration="
             if rc == 0 and marker in output and video.is_file() and not video.is_symlink():
+                metadata = video.parent / "meta.json"
+                if metadata.is_symlink():
+                    raise ValueError("录制元数据不能是符号链接")
+                meta = json.loads(metadata.read_text()) if metadata.exists() else {}
+                if not isinstance(meta, dict):
+                    raise ValueError("录制元数据无效")
                 with dispatch.locked(self.run):
                     dispatch.bind_input(self.run, "blurt/recording.mp4", self.recording_consent,
                                         json.loads(self.snapshot["manifest.json"]).get("targets", []))
                 state = {"state": "recorded", "video": str(video), "session": str(video.parent)}
+                if meta.get("recovered") or meta.get("incomplete") or meta.get("warning"):
+                    state.update(recovered=bool(meta.get("recovered")),
+                                 incomplete=bool(meta.get("incomplete") or meta.get("recovered")),
+                                 message=meta.get("warning") or "录制异常结束，结尾可能丢失，请核对后再处理。")
             elif rc == 2:
                 state = {"state": "cancelled", "message": "录制已取消，请新建运行后重试"}
             else:

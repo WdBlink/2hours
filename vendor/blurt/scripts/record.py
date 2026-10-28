@@ -19,6 +19,7 @@ Engines (auto-selected; override with --engine or ~/.blurt/config.json → recor
   record.py inbox                       recordings made with the Blurt app (~/Blurt, bound projects) + processed?
   record.py install-app                 double-clickable recorder: ~/Applications/Blurt.app / Start-menu "Blurt"
   record.py status                      active recording, if any
+  record.py recover --session DIR        salvage an interrupted recording without overwriting its original
   record.py devices                     screens / microphones (JSON)
   record.py test [--seconds 3]          headless capture → permission / mic check, returns a screen frame
   record.py build                       (macOS) compile the native recorder now
@@ -28,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import plistlib
 import queue
@@ -36,6 +38,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import wave
@@ -491,13 +494,33 @@ def cmd_start(a) -> None:
         out(f"CANCELLED {result.get('reason', 'by user')} — nothing was recorded")
         sys.exit(2)
     if ev == "error":
+        if engine == "native":
+            try:
+                result = recover_session(session)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                result["message"] = f"{result.get('message')}; recovery unavailable: {error}"
+        if result.get("recovered"):
+            finish_session(session, result, meta)
+            return
         hint = ""
         if result.get("code") == "screen_permission":
             owner = APP_NAME if TWO_HOURS else "the app hosting this agent"
             hint = (f" → grant Screen Recording to {owner} (System Settings → Privacy & Security → "
                     "Screen & System Audio Recording), then retry recording.")
         die(f"recording failed: {result.get('code')}: {result.get('message')}{hint}")
+    finish_session(session, result, meta)
+
+
+def finish_session(session, result, meta):
     final = session / "recording.mp4"
+    result = dict(result)
+    warning = result.get("warning", "")
+    if result.get("incomplete") and not warning:
+        warning = "录制异常结束，结尾可能丢失，请核对内容后再处理。"
+    if result.get("mic_enabled") is True and result.get("audio_buffers") == 0 and "麦克风" not in warning:
+        warning += " 未录到麦克风音频，不能据此确认用户口述。"
+    if warning:
+        result["warning"] = warning.strip()
     if result.get("region"):
         update_global_config({"record": {"last_region": result["region"]}})
     dur = probe_duration(final)
@@ -505,7 +528,134 @@ def cmd_start(a) -> None:
     n_markers = sum(1 for l in events.open(encoding="utf-8") if '"marker"' in l) if events.exists() else 0
     meta.update({k: v for k, v in result.items() if k not in ("event", "file")}, video=final.name, duration=dur)
     save_json(session / "meta.json", meta)
+    if warning:
+        out({"event": "recovered" if result.get("recovered") else "recording_warning",
+             "session": str(session), "warning": result["warning"]})
     out(f"DONE video={final} duration={fmt_ts(dur)} markers={n_markers} events={'events.jsonl' if events.exists() else '-'}")
+
+
+def recover_session(session):
+    session = Path(session).expanduser().absolute()
+    if session.is_symlink() or not session.is_dir():
+        raise ValueError("recovery requires a real session directory")
+    session = session.resolve()
+    video, backup = session / "recording.mp4", session / "recording.original.mp4"
+    for name in ("recording.mp4", "meta.json", "meta.json.tmp", "events.jsonl", "native-events.jsonl", ".cmd"):
+        path = session / name
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise ValueError(f"recovery refuses a non-regular file: {path}")
+    if not video.is_file() or video.stat().st_size == 0:
+        raise ValueError("no recording.mp4 data to recover; existing files were preserved")
+    if backup.exists() or backup.is_symlink():
+        raise ValueError(f"original backup already exists; inspect it before recovery: {backup}")
+    meta = load_json(session / "meta.json", {})
+    if not isinstance(meta, dict):
+        raise ValueError("invalid recording metadata; existing files were preserved")
+    if meta.get("recovered") or (meta.get("video") == video.name
+                                 and not meta.get("failed") and not meta.get("incomplete")):
+        raise ValueError("recording is already complete or recovered")
+    if meta.get("event") == "cancelled" or meta.get("cancelled"):
+        raise ValueError("cancelled recordings are not recovered")
+    commands = session / ".cmd"
+    if commands.exists() and any(line.strip() == "discard" for line in commands.read_text().splitlines()):
+        raise ValueError("discarded recordings are not recovered")
+    terminal = {}
+    for name in ("events.jsonl", "native-events.jsonl"):
+        log = session / name
+        if not log.exists():
+            continue
+        for line in log.read_text().splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if name == "events.jsonl" and event.get("type") == "discard":
+                raise ValueError("discarded recordings are not recovered")
+            if name == "native-events.jsonl" and event.get("event") in ("stopped", "cancelled", "error"):
+                terminal = event
+    if terminal.get("event") == "cancelled":
+        raise ValueError("cancelled recordings are not recovered")
+    state = load_json(STATE_FILE)
+    if state is not None:
+        if not isinstance(state, dict) or type(state.get("pid")) is not int or state["pid"] <= 0 or not isinstance(state.get("session"), str):
+            raise ValueError("cannot verify the active recording state")
+        if Path(state["session"]).resolve() == session:
+            try:
+                os.kill(state["pid"], 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise ValueError("session is still recording")
+    if IS_MAC:
+        processes = run(["/bin/ps", "-axww", "-o", "pid=", "-o", "command="], timeout=5).stdout
+        for line in processes.splitlines():
+            if not re.search(r"(?:^|/)" + re.escape(EXECUTABLE) + r"(?:\s|$)", line):
+                continue
+            output_arg = re.search(r"(?:^|\s)--out\s+(.+?)(?=\s--[\w-]+(?:\s|$)|$)", line)
+            if output_arg and Path(output_arg[1]).resolve() == video:
+                raise ValueError("native recorder is still writing this session")
+            if not output_arg:
+                pid = line.split(None, 1)[0]
+                opened = run(["/usr/sbin/lsof", "-a", "-p", pid, "-Fn", "--", str(video)], check=False, timeout=5)
+                if opened.returncode == 0:
+                    raise ValueError("standalone recorder still has this recording open")
+                if opened.returncode != 1:
+                    raise ValueError("cannot verify whether the standalone recorder is writing this session")
+    before = video.stat()
+    descriptor, temporary = tempfile.mkstemp(prefix=".recording-recovery-", suffix=".mp4", dir=session)
+    os.close(descriptor)
+    temporary = Path(temporary)
+    try:
+        remux = run([ffmpeg_bin(), "-nostdin", "-v", "error", "-y", "-i", str(video),
+                     "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", str(temporary)], check=False)
+        if remux.returncode:
+            raise ValueError(f"recording could not be recovered: {remux.stderr[-500:]}")
+        probe = json.loads(run([ffmpeg_bin("ffprobe"), "-v", "error", "-read_intervals", "%+1", "-count_frames",
+                                "-show_entries", "stream=codec_type,width,height,nb_read_frames:format=duration",
+                                "-of", "json", str(temporary)]).stdout)
+        duration = float(probe.get("format", {}).get("duration", 0))
+        streams = probe.get("streams", [])
+        if not math.isfinite(duration) or duration <= 0 or not any(
+                stream.get("codec_type") == "video" and stream.get("width", 0) > 0 and stream.get("height", 0) > 0
+                and int(stream.get("nb_read_frames", 0)) > 0 for stream in streams):
+            raise ValueError("recovered file has no decodable video")
+        after = video.stat()
+        if video.is_symlink() or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError("recording changed during recovery; existing files were preserved")
+        os.link(video, backup, follow_symlinks=False)
+        os.replace(temporary, video)
+        audio = any(stream.get("codec_type") == "audio" for stream in streams)
+        counts = {key: terminal.get(key, meta.get(key)) for key in ("audio_buffers", "system_buffers")}
+        sources = {}
+        for source, key in (("mic_audio", "audio_buffers"), ("system_audio", "system_buffers")):
+            value = counts[key]
+            sources[source] = "missing" if not audio else "unverified"
+            if audio and type(value) is int and value >= 0:
+                sources[source] = "captured" if value else "missing"
+        warning = "录制已恢复，但结尾可能丢失，请核对内容后再处理。"
+        if sources["mic_audio"] == "missing":
+            warning += " 未录到麦克风音频，不能据此确认用户口述。" if audio else " 未检测到音轨，不能作为用户口述转写。"
+            if sources["system_audio"] == "captured":
+                warning += " 已保留系统音频。"
+        elif sources["mic_audio"] == "unverified":
+            warning += " 麦克风口述是否被录到尚未核验。"
+        return {**meta, "event": "stopped", "recovered": True, "incomplete": True, "failed": False,
+                "duration": duration, "audio_track_present": audio, **sources,
+                **{key: value for key, value in counts.items() if value is not None},
+                "warning": warning, "original": backup.name}
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def cmd_recover(a):
+    session = Path(a.session).expanduser().absolute()
+    try:
+        finish_session(session, recover_session(session), {})
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        die(f"recovery failed: {error}")
 
 
 def run_native(session: Path, a, cfg, last, region, cmd_file: Path) -> dict:
@@ -619,6 +769,8 @@ def run_native_app(args, session, options, cmd_file):
                 stop()
                 stop_sent = True
             time.sleep(0.1)
+    if final.get("event") == "cancelled":
+        return final
     if process.returncode != 0 or not final:
         return {"event": "error", "code": f"launch_{process.returncode}",
                 "message": "Two Hours exited without a successful app launch and recording result; see native-stderr.log"}
@@ -816,6 +968,8 @@ def main() -> None:
     s.add_argument("--fps", type=int)
     s.add_argument("--max-width", type=int)
     s.add_argument("--max-minutes", type=float, default=120)
+    recovery = sub.add_parser("recover")
+    recovery.add_argument("--session", required=True)
     for c in ("stop", "pause", "resume", "restart", "marker", "discard", "status", "devices", "build", "inbox", "install-app", "identity"):
         sub.add_parser(c)
     t = sub.add_parser("test")
@@ -826,7 +980,7 @@ def main() -> None:
     a = p.parse_args()
     if a.cmd in ("stop", "pause", "resume", "restart", "marker", "discard"):
         return send(a.cmd)
-    {"start": cmd_start, "status": cmd_status, "devices": cmd_devices, "build": cmd_build, "test": cmd_test,
+    {"start": cmd_start, "recover": cmd_recover, "status": cmd_status, "devices": cmd_devices, "build": cmd_build, "test": cmd_test,
      "inbox": cmd_inbox, "install-app": cmd_install_app, "identity": lambda _: out(identity())}[a.cmd](a)
 
 

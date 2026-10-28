@@ -39,14 +39,15 @@
     "final_brand": "Rebuilt and installed the final Two Hours.app from the installed skill with the approved 2h app icon and 16/32px menu templates. Strict signature verification and LaunchServices --diagnose passed; bundled menu assets match the canonical brand files.",
     "launchservices": "open -n -W with --diagnose returned Two Hours / dev.twohours.recorder / parent_pid=1 without starting capture.",
     "permissions": "Real clean-macOS first authorization and actual screen/microphone capture were not tested.",
-    "command_log": "All command writers append newline-delimited commands; consumers retain offsets and partial lines without deleting or truncating the log. Swift typecheck passes after this repair."
+    "command_log": "All command writers append newline-delimited commands; consumers retain offsets and partial lines without deleting or truncating the log. Swift typecheck passes after this repair.",
+    "recording_recovery": "Synthetic native writer tests exercise continuous/static video, absent audio buffers, two audio tracks with one empty, no-mic and pause-adjusted timestamps. External SIGKILL files and recovered copies strictly decode. Audio tests check 440 Hz and duration across int16/float32, interleaved/planar, mono/stereo and 44.1/48 kHz, including partial late samples and 1024-frame packets. No real screen or microphone capture was started."
   },
   "local_modifications": {
     "scripts/_identity.py": "Select bundled Two Hours identity, brand assets, and isolated storage; preserve standalone Blurt defaults.",
     "scripts/_common.py": "Use distribution storage and a shared append-only command log reader with byte offsets and partial-line buffering.",
-    "scripts/record.py": "Build and verify a Two Hours bundle, launch it through LaunchServices, forward file commands, preserve recording events, and reject overwriting existing sessions.",
+    "scripts/record.py": "Build and verify a Two Hours bundle, launch it through LaunchServices, forward file commands, preserve recording events, and reject overwriting existing sessions. Recover interrupted native recordings through a validated remux, retain the original file, reject active/completed/discarded sessions, and report incomplete or missing microphone audio.",
     "scripts/doctor.py": "Report the actual recording identity and explain app-specific permissions without requesting them.",
-    "recorder/macos/BlurtRecorder.swift": "Read bundle identity and paths, use distribution labels/icons/notification names, accept command files, and support permission-free identity diagnostics. Selectively port 1.0.2 four-second movie fragments and disabled frame reordering; this does not implement automatic restart or stitching.",
+    "recorder/macos/BlurtRecorder.swift": "Read bundle identity and paths, use distribution labels/icons/notification names, accept command files, and support permission-free identity diagnostics. Selectively port 1.0.2 four-second movie fragments and disabled frame reordering; this does not implement automatic restart or stitching. Keep static video and silent tracks advancing; normalize PCM through AVAudioConverter before filling silence, drain pending media on stop, and retain failed app sessions.",
     "scripts/tk_recorder.py": "Consume the shared append-only command log without unlinking files held by concurrent writers."
   },
   "upstream_inspected": {

@@ -2,7 +2,7 @@
 
 # Two Hours · 2hours
 
-![Version](https://img.shields.io/badge/version-0.3.2-CC785C)
+![Version](https://img.shields.io/badge/version-0.3.3-CC785C)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 把散落的工作进展和阅读材料放进一份报告，集中审阅、口述圈画，再一次确认任务理解与执行去向。Agent 将独立任务送回各自的 Codex 会话，让工作继续推进。
@@ -64,13 +64,21 @@ Cubox 安装器通过 GitHub HTTPS 下载官方 v1.0.10 构建，不需要本机
 
 Two Hours 使用独立的 `~/.2hours/recorder/` 保存录制配置、模型和状态。首次转录需按随包 `doctor.py` 的提示选择 ASR 后端，独立 Blurt 的配置不会自动迁移。页面发起的录制保存在本次运行的 `blurt/` 子目录；已有内容不会被覆盖。
 
+录制器会在画面静止时低频补写最后一帧，为暂时没有数据的音轨补静音，使 MP4 分片持续保存。静音用于保持文件时间轴，不代表录到了口述。录制进程异常结束时会尝试恢复已写入的片段，保留原片为 `recording.original.mp4`，并在审阅页提示录制不完整。整机重启等情况下，可对原录制目录手动恢复：
+
+```bash
+uv run ~/.codex/skills/2hours/vendor/blurt/scripts/record.py recover --session /绝对路径/本轮运行/blurt
+```
+
+恢复完成后可让当前会话继续处理该录制。恢复不会覆盖原片备份，也不会恢复用户主动丢弃的录制。尚未落盘的末尾片段无法保证找回；旧版已经损坏、缺少 MP4 索引的文件也不保证可恢复。
+
 应用标识是 `dev.twohours.recorder`，由 LaunchServices 启动。当前为本机构建与 ad-hoc 签名，并非 Developer ID 公证发行包；权限是否保留由 macOS 决定。
 
 `2h` 标识用于看板、应用和菜单栏，深浅色菜单栏均使用单色模板。[品牌源文件与重建说明](assets/brand/README.md)包含 SVG 和 PNG。终端文字标识沿用 `2h`，当前尚未提供 TUI。
 
 版本更新通过 Git tag 管理：在确认本地改动已保留后 `git fetch --tags`，再切换到选定版本。**唯一维护源是本仓库**，安装目录是运行副本；运行资料独立存于 `~/.2hours/runs/`。
 
-当前发布版为 [`v0.3.2`](https://github.com/WdBlink/2hours/releases/tag/v0.3.2)。已有 Git 安装在保留本地改动后执行 `git fetch --tags` 和 `git switch --detach v0.3.2`。从发布压缩包安装时，将代码解压到新的目录后再替换安装；不要覆盖 `~/.2hours/` 中的运行资料。
+当前发布版为 [`v0.3.3`](https://github.com/WdBlink/2hours/releases/tag/v0.3.3)。已有 Git 安装在保留本地改动后执行 `git fetch --tags` 和 `git switch --detach v0.3.3`。从发布压缩包安装时，将代码解压到新的目录后再替换安装；不要覆盖 `~/.2hours/` 中的运行资料。
 
 ## 无私人数据的预览
 
