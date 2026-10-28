@@ -41,7 +41,7 @@ class BoardTests(unittest.TestCase):
         self.assertIn('id="notes-window"', result)
         self.assertIn('aria-label="收起意见与审核，保留草稿"', result)
         self.assertIn("保存意见 → 提交整理 → 集中审核 · 最后确认一次", result)
-        self.assertIn(".approval-body", result)
+        self.assertNotIn('id="twohours-review-style"', result)
         self.assertIn("connect-src 'self'", result)
         self.assertIn("data:image/svg+xml;base64," + base64.b64encode((SCRIPT.parents[1] / "assets/brand/mark.svg").read_bytes()).decode(), result)
         self.assertIn("data:image/svg+xml;base64," + base64.b64encode((SCRIPT.parents[1] / "assets/desk-keyboard.svg").read_bytes()).decode(), result)
@@ -181,6 +181,54 @@ const empty = fixture([], 360, 410);
 fitShelf(empty);
 assert.equal(empty.controls.get('.page-status').textContent, '0 份');
 assert.equal(empty.controls.get('.shelf-pages').hidden, true);
+"""
+        subprocess.run([shutil.which("node"), '-e', program], check=True, capture_output=True, text=True, timeout=10)
+
+    @unittest.skipUnless(shutil.which("node"), "review gallery requires Node.js")
+    def test_review_gallery_keeps_only_bound_evidence_in_source_order(self):
+        source = (SCRIPT.parents[1] / "assets/bridge.js").read_text()
+        logic = source[source.index('function reviewImages'):source.index('function renderReviewTask')]
+        program = "const assert = require('node:assert/strict');\n" + logic + """
+const first = Object.freeze({url:'/evidence/first.jpg',caption:'用户圈画'});
+const second = Object.freeze({url:'/evidence/second.jpg',caption:'下一步现场'});
+assert.deepEqual(reviewImages([]), []);
+assert.deepEqual(reviewImages([{id:'written'}]), []);
+const images = reviewImages([
+  {evidence_images:[first, null, {url:'https://example.com/image.jpg'}, {url:'javascript:alert(1)'}]},
+  {evidence_images:[{url:'//example.com/image.jpg'}, {url:'data:image/png;base64,AAAA'}, {}, second]}
+]);
+assert.deepEqual(images, [first, second], 'only server-bound images may enter the gallery or zoom links');
+assert.equal(images[0], first, 'captions and source metadata are preserved');
+"""
+        subprocess.run([shutil.which("node"), '-e', program], check=True, capture_output=True, text=True, timeout=10)
+
+    @unittest.skipUnless(shutil.which("node"), "review field sizing requires Node.js")
+    def test_review_fields_grow_shrink_and_refit_after_hidden_layout(self):
+        source = (SCRIPT.parents[1] / "assets/bridge.js").read_text()
+        logic = source[source.index('function fitReviewFields'):source.index('new ResizeObserver(fitReviewFields)')]
+        program = """
+const assert = require('node:assert/strict');
+const fields = [0, 2, 4].map(border => ({
+  style: {height: '80px'}, contentHeight: 160,
+  get offsetHeight() {return parseFloat(this.style.height) || 50;},
+  get clientHeight() {return this.offsetHeight - border;},
+  get scrollHeight() {return Math.max(this.contentHeight, this.clientHeight);}
+}));
+const reviewUI = {page: {clientWidth: 0, querySelectorAll: () => fields}};
+""" + logic + """
+fitReviewFields();
+assert(fields.every(field => field.style.height === '80px'), 'a closed dialog must not collapse fields');
+reviewUI.page.clientWidth = 640;
+fitReviewFields();
+assert(fields.every(field => field.clientHeight >= field.scrollHeight), 'long content must fit including borders');
+const expanded = fields.map(field => field.offsetHeight);
+fields.forEach(field => {field.contentHeight = 40;});
+fitReviewFields();
+assert(fields.every((field, i) => field.offsetHeight < expanded[i]), 'deleting content must shrink the field');
+reviewUI.page.clientWidth = 300;
+fields.forEach(field => {field.contentHeight = 240;});
+fitReviewFields();
+assert(fields.every(field => field.clientHeight >= field.scrollHeight), 'wrapped content must fit after resizing');
 """
         subprocess.run([shutil.which("node"), '-e', program], check=True, capture_output=True, text=True, timeout=10)
 

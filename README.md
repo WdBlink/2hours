@@ -2,7 +2,7 @@
 
 # Two Hours · 2hours
 
-![Version](https://img.shields.io/badge/version-0.3.3-CC785C)
+![Version](https://img.shields.io/badge/version-0.3.4-CC785C)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 把散落的工作进展和阅读材料放进一份报告，集中审阅、口述圈画，再一次确认任务理解与执行去向。Agent 将独立任务送回各自的 Codex 会话，让工作继续推进。
@@ -25,6 +25,8 @@ $2hours 继续 /绝对路径/已有运行目录 中尚未分发的任务。
 4. 修改或暂缓条目，最后确认一次。Agent 使用 Codex 原生工具分发，逐批保存真实回执。
 
 默认范围是昨天；自然周按当地周一至周日计算。录屏不会随报告预览自动启动。发送成功只表示任务已送达，不表示下游工作已完成。
+
+集中审核沿用 Blurt 的专注审阅编排：左侧任务目录，中间大图与缩略图，右侧核对原话并直接编辑任务。文本框随内容自动伸展，截图下方选择暂缓或纳入执行，顶栏完成最终确认。窄屏按顺序显示证据和编辑区。审核界面的样式随服务加载，旧报告重新打开时也能使用新版界面，原报告、录音和批准快照保持不变。
 
 卡片和阅读条目可独立标记「已审阅」，不要求填写文字意见；此标记只保存阅读状态，不批准任务分发。齿轮设置采用左分类、右内容布局，提供录音留存和派发方式，辅助说明可通过信息图标查看。录音默认一直保留，保存策略不会自动删除文件；清理需在逐文件预览后主动执行，未处理或未审核的录音受到保护。范围与到期规则见[设置说明](references/settings.md)。
 
@@ -78,7 +80,7 @@ uv run ~/.codex/skills/2hours/vendor/blurt/scripts/record.py recover --session /
 
 版本更新通过 Git tag 管理：在确认本地改动已保留后 `git fetch --tags`，再切换到选定版本。**唯一维护源是本仓库**，安装目录是运行副本；运行资料独立存于 `~/.2hours/runs/`。
 
-当前发布版为 [`v0.3.3`](https://github.com/WdBlink/2hours/releases/tag/v0.3.3)。已有 Git 安装在保留本地改动后执行 `git fetch --tags` 和 `git switch --detach v0.3.3`。从发布压缩包安装时，将代码解压到新的目录后再替换安装；不要覆盖 `~/.2hours/` 中的运行资料。
+当前发布版为 [`v0.3.4`](https://github.com/WdBlink/2hours/releases/tag/v0.3.4)。已有 Git 安装在保留本地改动后执行 `git fetch --tags` 和 `git switch --detach v0.3.4`。从发布压缩包安装时，将代码解压到新的目录后再替换安装；不要覆盖 `~/.2hours/` 中的运行资料。更新后重启正在运行的审核服务并刷新页面，使用原运行目录与端口可继续读取浏览器草稿。
 
 ## 无私人数据的预览
 

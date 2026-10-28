@@ -120,7 +120,17 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bridge.ReviewRun(self.run, self.skill)
         with self.assertRaises(ValueError):
-            bridge.inject_bridge("<body></body>", {}, "alert(1)")
+            bridge.inject_bridge("<body></body>", {}, "alert(1)", "")
+
+    def test_live_review_styles_do_not_rewrite_the_frozen_report(self):
+        style = (Path(__file__).parents[1] / "assets" / "review.css").read_text()
+        status, page = self.request("/")
+        self.assertEqual(status, 200)
+        self.assertIn(f'<style id="twohours-review-style">{style}</style>', page)
+        self.assertIn(".focus-body", style)
+        self.assertNotIn(".approval-body", style)
+        self.assertEqual((self.run / "report.html").read_text(), REPORT)
+        self.review.unchanged()
 
     def test_rejects_foreign_origin_host_token_and_unknown_path(self):
         for headers in [{"Origin": "https://example.com"}, {"Origin": ""},

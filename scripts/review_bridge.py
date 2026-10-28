@@ -43,7 +43,7 @@ def emit(event):
     print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
-def inject_bridge(report, config, script):
+def inject_bridge(report, config, script, style):
     """Pin only our additional script, preserving every existing CSP directive."""
     pattern = r'(<meta\s+http-equiv="Content-Security-Policy"\s+content=")([^"]+)(")'
     match = re.search(pattern, report, re.I)
@@ -56,7 +56,7 @@ def inject_bridge(report, config, script):
     policy = re.sub(r"((?:^|;)\s*script-src\s+)", rf"\1'sha256-{digest}' ", policy, count=1)
     report = report[:match.start(2)] + html.escape(policy, quote=True) + report[match.end(2):]
     payload = json.dumps(config, ensure_ascii=True).replace("<", "\\u003c")
-    addition = f'<script id="twohours-config" type="application/json">{payload}</script><script>{script}</script>'
+    addition = f'<style id="twohours-review-style">{style}</style><script id="twohours-config" type="application/json">{payload}</script><script>{script}</script>'
     if not re.search(r"</body\s*>", report, re.I):
         raise ValueError("报告缺少 body 结束标签")
     return re.sub(r"</body\s*>", lambda _: addition + "</body>", report, count=1, flags=re.I)
@@ -78,8 +78,10 @@ class ReviewRun:
         if any(not re.search(r'\bid=[\'\"]panel-' + re.escape(i) + r'[\'\"]', report) for i in ids):
             raise ValueError("报告 panel ID 与 manifest 不匹配")
         self.token = secrets.token_urlsafe(32)
-        script = (Path(__file__).resolve().parent.parent / "assets" / "bridge.js").read_text()
-        self.page = inject_bridge(report, {"token": self.token, "panels": ids, "run_id": manifest.get("run_id", self.run.name)}, script).encode()
+        assets = Path(__file__).resolve().parent.parent / "assets"
+        script = (assets / "bridge.js").read_text()
+        style = (assets / "review.css").read_text()
+        self.page = inject_bridge(report, {"token": self.token, "panels": ids, "run_id": manifest.get("run_id", self.run.name)}, script, style).encode()
         self.lock = threading.Lock()
         self.event_sink = event_sink
         self.log = self.run / "recording.log"

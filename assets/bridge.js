@@ -268,6 +268,7 @@
       const context = notesWindow?.querySelector(".window-context");
       if (context && !currentReview && !shownPlan) context.textContent = automatic ? "保存意见 → 提交整理 → 自动派发明确任务" : "保存意见 → 提交整理 → 集中审核 · 最后确认一次";
       const entries = Object.entries(notesPreview.panels).filter(([, value]) => value.comment.trim());
+      notesBox.dataset.empty = String(!entries.length);
       notesBox.replaceChildren(node("summary", `文字意见 · ${entries.length} 份`), node("p", automatic ? "已开启自动派发。本次新增或修改的明确任务可发到对应会话，或在已核验项目中新建会话；不会逐项再次确认。未变化旧项不会补授当前自动权限，可能留待人工处理。" : "保存卡片意见后提交给 AI 整理，再集中审核结果。无需录音也可完成。"));
       const submit = node("button", automatic ? `提交并按自动模式处理（${entries.length} 份）` : `提交给 AI 整理（${entries.length} 份）`);
       submit.type = "button";
@@ -294,6 +295,7 @@
         notesBox.append(card);
       }
     } catch (error) {
+      delete notesBox.dataset.empty;
       const retry = node("button", "重新连接"); retry.type = "button";
       retry.addEventListener("click", loadNotes);
       const message = node("p", error.message); message.setAttribute("role", "alert");
@@ -395,8 +397,9 @@
   function showAutomatic(plan) {
     const key = JSON.stringify([plan.plan_id, plan.dispatch_status]);
     if (shownPlan === key) return;
-    shownPlan = key; currentReview = null;
-    planBox.classList.remove("approval-plan"); notesWindow?.classList.remove("unified-review");
+    shownPlan = key; currentReview = null; reviewUI = null;
+    notesWindow?.querySelector(".focus-footer")?.remove();
+    planBox.classList.remove("focus-plan"); notesWindow?.classList.remove("unified-review");
     document.getElementById("notes-content")?.classList.remove("unified-content");
     actionLabel(reviewLink, "自动派发结果", icons.review);
     const title = document.getElementById("notes-title"); if (title) title.textContent = "自动派发结果";
@@ -490,6 +493,14 @@
   let reviewBusy = false;
   let reviewUnavailable = "";
   let reviewUI = null;
+  function fitReviewFields() {
+    if (!reviewUI?.page.clientWidth) return;
+    reviewUI.page.querySelectorAll("textarea").forEach(input => {
+      input.style.height = "auto";
+      input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`;
+    });
+  }
+  new ResizeObserver(fitReviewFields).observe(planBox);
   const draftKey = id => `2hours:${config.run_id}:approval:${id}`;
   const itemQuestions = item => Array.isArray(item.questions) ? item.questions : item.questions ? [item.questions] : [];
   const questionText = question => typeof question === "string" ? question : question?.question || question?.text || JSON.stringify(question);
@@ -521,20 +532,30 @@
     const unresolved = reviewDraft.filter((task, i) => task.selected && taskProblems(task, currentReview.tasks[i]).length);
     const approved = Boolean(currentReview.approval);
     reviewUI.count.textContent = `${selected.length} 项${approved ? "获准执行" : "选入执行"} · ${reviewDraft.length - selected.length} 项暂缓`;
-    reviewUI.draft.textContent = approved ? "最终决定已保存，发送进展以会话回执为准。" : reviewUnavailable || (newerReview ? "清单已更新；请载入新版后确认。旧稿仍保存在浏览器。" : reviewSaveError ? "浏览器无法保存草稿，请勿刷新或关闭页面。" : unresolved.length ? `${unresolved.length} 项还需补充，点左侧任务继续核对。` : reviewChanged ? "修改已暂存在此浏览器，收起后可继续。" : "核对原意与去向；未选中的任务本次不分发。");
+    reviewUI.draft.textContent = approved ? "最终决定已保存，发送进展以会话回执为准。" : reviewUnavailable || (newerReview ? "清单已更新；请载入新版后确认。旧稿仍保存在浏览器。" : reviewSaveError ? "浏览器无法保存草稿，请勿刷新或关闭页面。" : unresolved.length ? `${unresolved.length} 项还需补充，切换到对应任务继续核对。` : reviewChanged ? "修改已暂存在此浏览器，收起后可继续。" : "核对原意与去向；未选中的任务本次不分发。");
     reviewUI.submit.textContent = approved ? "已完成本轮审核" : selected.length ? `确认并分发 ${selected.length} 项` : "全部暂缓，完成审阅";
     reviewUI.submit.disabled = approved || reviewBusy || reviewUnavailable || Boolean(newerReview) || Boolean(unresolved.length);
     reviewUI.reload.hidden = !newerReview;
     reviewDraft.forEach((task, i) => {
       const row = reviewUI.rows[i];
-      const target = currentReview.targets.find(candidate => candidate.key === task.target_key);
       const problems = taskProblems(task, currentReview.tasks[i]);
       row.button.setAttribute("aria-current", i === reviewIndex ? "step" : "false");
-      row.title.textContent = task.objective.trim() || "待补充的任务";
-      row.target.textContent = target?.title || "待选择执行去向";
+      row.title.textContent = currentReview.tasks[i].source_items?.[0]?.title || task.objective.trim() || "待补充的任务";
       row.state.textContent = !task.selected ? "暂缓" : problems.length ? "待补充" : approved ? "已确认" : "本轮执行";
       row.state.dataset.state = !task.selected ? "deferred" : problems.length ? "question" : "selected";
     });
+    if (reviewUI.keep) {
+      const task = reviewDraft[reviewIndex];
+      reviewUI.keep.setAttribute("aria-pressed", String(task.selected));
+      reviewUI.defer.setAttribute("aria-pressed", String(!task.selected));
+      reviewUI.keep.disabled = reviewUI.defer.disabled = approved || reviewBusy;
+      reviewUI.itemState.textContent = reviewUI.rows[reviewIndex].state.textContent;
+      reviewUI.itemState.dataset.state = reviewUI.rows[reviewIndex].state.dataset.state;
+    }
+  }
+  function reviewImages(items) {
+    return items.flatMap(item => (item.evidence_images || []).filter(frame =>
+      typeof frame?.url === "string" && frame.url.startsWith("/evidence/")));
   }
   function renderReviewTask(focus = false) {
     const original = currentReview.tasks[reviewIndex];
@@ -544,84 +565,107 @@
     const page = reviewUI.page;
     page.replaceChildren();
     page.scrollTop = 0;
-    const heading = node("header"); heading.className = "approval-page-heading";
-    const folio = node("span", `${String(reviewIndex + 1).padStart(2, "0")} / ${String(reviewDraft.length).padStart(2, "0")} · ${(original.panel_ids || []).join(" · ") || "口述与批注"}`); folio.className = "approval-eyebrow";
+    const stage = reviewUI.stage; stage.replaceChildren();
+    const media = node("figure"); media.className = "focus-media";
+    const images = reviewImages(original.source_items || []);
+    if (images.length) {
+      const link = node("a"); link.className = "focus-shot"; link.target = "_blank"; link.rel = "noopener";
+      link.setAttribute("aria-label", "查看原尺寸截图（新标签页）");
+      const image = node("img"); link.append(image);
+      const caption = node("figcaption"); caption.className = "focus-caption";
+      image.addEventListener("error", () => {caption.textContent = "截图暂时无法读取，请重新载入页面。";});
+      const strip = node("nav"); strip.className = "focus-thumbnails"; strip.setAttribute("aria-label", "截图选择"); strip.hidden = images.length < 2;
+      function showImage(index) {
+        const frame = images[index]; image.src = link.href = frame.url;
+        image.alt = frame.caption || `画面 ${index + 1}`;
+        caption.textContent = `${index + 1} / ${images.length}　${frame.caption || "录制现场"}`;
+        caption.title = frame.caption || "录制现场";
+        Array.from(strip.children).forEach((button, i) => button.setAttribute("aria-pressed", String(i === index)));
+      }
+      images.forEach((frame, index) => {
+        const button = node("button"); button.type = "button"; button.setAttribute("aria-label", `查看截图 ${index + 1}`);
+        const thumb = node("img"); thumb.src = frame.url; thumb.alt = ""; thumb.loading = "lazy";
+        button.append(thumb); button.addEventListener("click", () => showImage(index)); strip.append(button);
+      });
+      showImage(0); media.append(link, caption, strip);
+    } else {
+      media.classList.add("is-empty");
+      media.append(node("p", "这条意见没有截图"), node("small", "可继续核对原话和任务说明。"));
+    }
+    const choices = node("div"); choices.className = "focus-item-actions"; choices.setAttribute("aria-label", "当前任务执行选择");
+    const defer = node("button", "暂缓"); defer.type = "button"; defer.className = "focus-defer";
+    const keep = node("button", "纳入执行"); keep.type = "button"; keep.className = "focus-keep";
+    for (const [button, selected] of [[defer, false], [keep, true]]) {
+      button.addEventListener("click", () => {task.selected = selected; saveReviewDraft();});
+      choices.append(button);
+    }
+    stage.append(media, choices);
+    const heading = node("header"); heading.className = "focus-page-heading";
+    const folio = node("span", `${String(reviewIndex + 1).padStart(2, "0")} / ${String(reviewDraft.length).padStart(2, "0")} · ${(original.panel_ids || []).join(" · ") || "口述与批注"}`); folio.className = "focus-eyebrow";
     const title = node("h3", original.source_items?.[0]?.title || `任务 ${reviewIndex + 1}`); title.tabIndex = -1;
-    heading.append(folio, title); page.append(heading);
-    const source = node("section"); source.className = "approval-source";
-    source.append(node("h4", "你的原话与现场"));
+    const itemState = node("span"); itemState.className = "focus-state";
+    heading.append(folio, title); page.append(heading, itemState);
+    Object.assign(reviewUI, {keep, defer, itemState});
+    const source = node("section"); source.className = "focus-source";
     for (const item of original.source_items || []) {
-      const evidence = node("div"); evidence.className = "approval-evidence";
+      const evidence = node("div"); evidence.className = "focus-evidence";
       if (item.quote) evidence.append(node("blockquote", item.quote));
       evidence.append(node("small", `${item.input_method === "written" ? "文字批注" : "口述记录"} · ${item.id}`));
-      if (item.evidence_images?.length) {
-        const frames = node("details"); frames.append(node("summary", `查看画面证据 · ${item.evidence_images.length} 张`));
-        for (const [index, frame] of item.evidence_images.entries()) {
-          if (typeof frame.url !== "string" || !frame.url.startsWith("/evidence/")) continue;
-          const figure = node("figure");
-          const img = node("img"); img.src = frame.url; img.loading = "lazy"; img.alt = frame.caption || `录制画面 ${index + 1}`;
-          figure.append(img, node("figcaption", frame.caption || `画面 ${index + 1}`)); frames.append(figure);
-        }
-        evidence.append(frames);
-      }
       source.append(evidence);
     }
     if (!original.source_items?.length) source.append(node("p", "此项没有附带原话，请结合报告核对。"));
     page.append(source);
-    const understanding = node("section"); understanding.className = "approval-fields approval-understanding";
+    const understanding = node("section"); understanding.className = "focus-fields focus-understanding";
     function field(labelText, key, rows) {
-      const group = node("div"); group.className = "approval-field";
+      const group = node("div"); group.className = "focus-field";
       const label = node("label", labelText);
       const input = node("textarea"); input.rows = rows; input.value = task[key]; input.maxLength = 10000; input.disabled = approved;
-      input.id = `approval-${task.id}-${key}`; label.htmlFor = input.id;
-      input.addEventListener("input", () => {task[key] = input.value; saveReviewDraft();});
+      input.id = `focus-${task.id}-${key}`; label.htmlFor = input.id;
+      input.addEventListener("input", () => {task[key] = input.value; fitReviewFields(); saveReviewDraft();});
       group.append(label, input); understanding.append(group);
     }
-    field("任务指令 · 可直接修改", "objective", 2);
+    field(approved ? "任务指令" : "任务指令 · 可直接修改", "objective", 2);
     field("范围与约束", "constraints", 1);
     field("完成的标准", "acceptance", 1);
     page.append(understanding);
     const questions = (original.source_items || []).filter(item => itemQuestions(item).length || item.confidence === "low");
     if (questions.length) {
-      const section = node("section"); section.className = "approval-questions approval-fields";
+      const section = node("section"); section.className = "focus-questions focus-fields";
       section.append(node("h4", "还有一点需要你说明"));
       for (const item of questions) {
         const label = node("label", itemQuestions(item).map(questionText).join("\n") || "这段理解把握较低，请补充或更正你的意思。");
         const answer = node("textarea"); answer.rows = 2; answer.maxLength = 10000; answer.value = task.answers[item.id] || ""; answer.disabled = approved;
-        answer.id = `approval-${task.id}-answer-${item.id}`; label.htmlFor = answer.id;
+        answer.id = `focus-${task.id}-answer-${item.id}`; label.htmlFor = answer.id;
         answer.addEventListener("input", () => {
           for (const related of reviewDraft) if (Object.hasOwn(related.answers, item.id)) related.answers[item.id] = answer.value;
+          fitReviewFields();
           saveReviewDraft();
         });
         section.append(label, answer);
       }
       page.append(section);
     }
-    const destination = node("section"); destination.className = "approval-destination approval-fields";
-    const targetLabel = node("label", "执行去向"); targetLabel.htmlFor = `approval-${task.id}-target`;
+    const destination = node("section"); destination.className = "focus-destination focus-fields";
+    const targetLabel = node("label", "执行去向"); targetLabel.htmlFor = `focus-${task.id}-target`;
     const select = node("select"); select.id = targetLabel.htmlFor; select.disabled = approved;
     select.append(new Option("请选择已核验的会话或项目", ""));
     for (const target of currentReview.targets) select.append(new Option(`${target.type === "project" ? "项目新会话" : "继续原会话"} · ${target.title || target.key}`, target.key));
     select.value = task.target_key;
-    const targetDetail = node("p"); targetDetail.className = "approval-target-detail";
+    const targetDetail = node("p"); targetDetail.className = "focus-target-detail";
     function showTarget() {
       const target = currentReview.targets.find(candidate => candidate.key === task.target_key);
       targetDetail.textContent = target ? `${target.type === "project" ? "在项目中新建执行会话" : "接续已有会话的上下文"} · ${target.thread_id || target.project_id || target.key}` : "只显示报告中已核验的执行目标。";
     }
     select.addEventListener("change", () => {task.target_key = select.value; showTarget(); saveReviewDraft();});
     showTarget(); destination.append(targetLabel, select, targetDetail);
-    const choice = node("label"); choice.className = "approval-choice";
-    const checkbox = node("input"); checkbox.type = "checkbox"; checkbox.checked = task.selected; checkbox.disabled = approved;
-    const choiceCopy = node("span"); choiceCopy.append(node("strong", "纳入本轮执行"), node("small", "未选中即暂缓；最终确认前不会发送。"));
-    checkbox.addEventListener("change", () => {task.selected = checkbox.checked; saveReviewDraft();});
-    choice.append(checkbox, choiceCopy); destination.append(choice); understanding.after(destination);
+    understanding.after(destination);
     if ((original.source_items || []).some(item => item.status === "deleted")) destination.append(node("p", "这项引用的原始意见已撤回，请保持暂缓，交由当前会话重新整理。"));
-    const paging = node("nav"); paging.className = "approval-paging"; paging.setAttribute("aria-label", "逐项审阅");
-    for (const [label, index] of [["← 上一项", reviewIndex - 1], ["下一项 →", reviewIndex + 1]]) {
-      const button = node("button", label); button.type = "button"; button.disabled = index < 0 || index >= reviewDraft.length;
+    const paging = node("nav"); paging.className = "focus-paging"; paging.setAttribute("aria-label", "逐项审阅");
+    for (const [label, index] of [["上一项", reviewIndex - 1], ["下一项", reviewIndex + 1]]) {
+      const button = iconButton(label, index < reviewIndex ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"); button.disabled = index < 0 || index >= reviewDraft.length;
       button.addEventListener("click", () => {reviewIndex = index; renderReviewTask(true); if (!currentReview.approval) saveReviewDraft();}); paging.append(button);
     }
-    page.append(paging); updateReviewSummary();
+    heading.append(paging); fitReviewFields(); updateReviewSummary();
     if (focus) title.focus({preventScroll: true});
   }
   function showReview(plan, force = false) {
@@ -651,18 +695,20 @@
     } else {try {localStorage.removeItem(draftKey(plan.review_id));} catch {}}
     document.getElementById("notes-content")?.classList.add("unified-content");
     notesWindow?.classList.add("unified-review");
-    planBox.classList.add("approval-plan");
+    notesBox.open = false;
+    planBox.classList.add("focus-plan");
     planBox.replaceChildren();
-    const body = node("div"); body.className = "approval-body";
-    const rail = node("nav"); rail.className = "approval-rail"; rail.setAttribute("aria-label", "待审核任务");
-    const railTitle = node("p", `${reviewDraft.length} 项决定`); railTitle.className = "approval-rail-title"; rail.append(railTitle);
-    const page = node("article"); page.className = "approval-page";
+    const body = node("div"); body.className = "focus-body";
+    const rail = node("nav"); rail.className = "focus-rail"; rail.setAttribute("aria-label", "待审核任务");
+    const page = node("article"); page.className = "focus-page";
+    page.setAttribute("aria-label", "任务理解与去向");
+    const stage = node("section"); stage.className = "focus-stage"; stage.setAttribute("aria-label", "现场证据");
     const rows = reviewDraft.map((task, i) => {
-      const button = node("button"); button.type = "button"; button.className = "approval-nav-item";
-      const number = node("span", String(i + 1).padStart(2, "0")); number.className = "approval-number";
-      const copy = node("span"); copy.className = "approval-nav-copy";
-      const title = node("strong"); const target = node("small"); const state = node("span"); state.className = "approval-item-state";
-      copy.append(title, target, state); button.append(number, copy);
+      const button = node("button"); button.type = "button"; button.className = "focus-nav-item";
+      const number = node("span", String(i + 1).padStart(2, "0")); number.className = "focus-number";
+      const copy = node("span"); copy.className = "focus-nav-copy";
+      const title = node("strong"); const state = node("span"); state.className = "focus-item-state";
+      copy.append(title); button.append(number, copy, state);
       button.addEventListener("click", () => {reviewIndex = i; renderReviewTask(true); if (!plan.approval) saveReviewDraft();});
       button.addEventListener("keydown", event => {
         if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
@@ -670,18 +716,22 @@
         const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : Math.max(0, Math.min(i + (event.key === "ArrowDown" ? 1 : -1), rows.length - 1));
         reviewIndex = next; renderReviewTask(); rows[next].button.focus();
       });
-      rail.append(button); return {button, title, target, state};
+      rail.append(button); return {button, title, state};
     });
-    body.append(rail, page);
-    const footer = node("footer"); footer.className = "approval-footer";
+    body.append(rail, stage, page);
+    const footer = node("footer"); footer.className = "focus-footer";
     const summary = node("div"); const count = node("strong"); const draft = node("span"); draft.setAttribute("role", "status"); summary.append(count, draft);
-    const actions = node("div"); actions.className = "approval-actions";
+    const actions = node("div"); actions.className = "focus-actions";
     const reload = node("button", "载入新版"); reload.type = "button"; reload.hidden = true; reload.addEventListener("click", () => showReview(newerReview, true));
-    const submit = node("button"); submit.type = "button"; submit.className = "approval-submit";
+    const submit = node("button"); submit.type = "button"; submit.className = "focus-submit";
     actions.append(reload, submit); footer.append(summary, actions);
-    const errorBox = node("p"); errorBox.className = "approval-error"; errorBox.setAttribute("role", "alert"); errorBox.hidden = true;
-    planBox.append(body, errorBox, footer);
-    reviewUI = {rows, page, count, draft, reload, submit};
+    const errorBox = node("p"); errorBox.className = "focus-error"; errorBox.setAttribute("role", "alert"); errorBox.hidden = true;
+    const windowBar = notesWindow?.querySelector(".window-bar");
+    windowBar?.querySelector(".focus-footer")?.remove();
+    if (windowBar) windowBar.insertBefore(footer, windowBar.querySelector(".window-close"));
+    else planBox.append(footer);
+    planBox.append(body, errorBox);
+    reviewUI = {rows, page, stage, count, draft, reload, submit};
     submit.addEventListener("click", async () => {
       reviewBusy = true; updateReviewSummary(); errorBox.hidden = true;
       page.querySelectorAll("input, textarea, select").forEach(input => {input.disabled = true;});

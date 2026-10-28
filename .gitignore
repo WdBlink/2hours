@@ -9,6 +9,7 @@ node_modules/
 vendor/cubox/cli/bin/
 runs/
 .2hours/
+.blurt/
 *.mp4
 !promo/twohours-demo.mp4
 *.wav
