@@ -12,7 +12,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-dev.ps1 setu
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-dev.ps1 doctor
 ```
 
-Setup creates .venv, installs pinned Python dependencies, renderer dependencies, Cubox CLI and the local SenseVoice model. The Cubox CLI archive and the model files are checked against pinned SHA-256 values; a mismatch stops setup and nothing is installed from that download. It never starts screen/microphone capture. Model files and recorder settings live in ~/.2hours/recorder; private runs stay outside Git. The launcher sets UTF-8 mode and discovers winget-installed ffmpeg. For direct Python commands use .venv/Scripts/python.exe and set PYTHONUTF8=1.
+Setup creates .venv, installs pinned Python dependencies, renderer dependencies, Cubox CLI and the local SenseVoice model. Fresh downloads are checked against pinned SHA-256 values. The Cubox CLI archive has one source: on a mismatch or an unlisted archive the installer exits before extracting and setup stops. Each model file has its own pinned hash per source: on a mismatch the download is discarded and the next source is tried; setup fails only when every source fails. Files that already exist are not checked again: if vendor/cubox/cli/bin/cubox-cli.exe is present the Cubox install step is skipped, and model files already in ~/.2hours/recorder/models are reused as they are. Delete them and rerun setup to re-download and verify. Setup never starts screen/microphone capture. Model files and recorder settings live in ~/.2hours/recorder; private runs stay outside Git. The launcher sets UTF-8 mode and discovers winget-installed ffmpeg. For direct Python commands use .venv/Scripts/python.exe and set PYTHONUTF8=1.
 
 ## Use
 

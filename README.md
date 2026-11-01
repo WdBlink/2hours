@@ -52,7 +52,7 @@ uv run vendor/blurt/scripts/doctor.py
 uv run vendor/blurt/scripts/record.py build
 ```
 
-Cubox 安装器通过 GitHub HTTPS 下载官方 v1.0.10 构建，不需要本机 Go；它不提供额外的校验和检查。源代码同包附带，也可按上游 Makefile 自行编译。首次使用 Cubox 时运行 `vendor/cubox/cli/bin/cubox-cli auth login`；不要把 token 写进聊天或仓库。
+Cubox 安装器通过 GitHub HTTPS 下载官方 v1.0.10 构建，不需要本机 Go；下载的压缩包在解压前按固定 SHA-256 核对，不一致或不在清单中的压缩包会让安装中止。已存在的 `cubox-cli` 不会被重新核对。源代码同包附带，也可按上游 Makefile 自行编译。首次使用 Cubox 时运行 `vendor/cubox/cli/bin/cubox-cli auth login`；不要把 token 写进聊天或仓库。
 
 重新打开 Codex 会话后调用 `$2hours`。当前宿主需要提供 `list_threads`、`read_thread`、`send_message_to_thread` 和 `create_thread` 等原生工具。缺少工具时仍可生成报告，但不能伪装已分发。
 
