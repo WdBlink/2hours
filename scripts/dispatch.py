@@ -4,10 +4,13 @@
 import argparse
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
-import fcntl
+import os
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 import hashlib
 import json
-import os
 from pathlib import Path
 import sys
 import tempfile
@@ -47,6 +50,8 @@ def write_json(path, value):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
+        if os.name == "nt":
+            return  # Windows cannot open directories for fsync; the file was flushed above.
         directory = os.open(path.parent, os.O_RDONLY)
         try:
             os.fsync(directory)
@@ -134,9 +139,30 @@ def bind_input(run, source, consent, targets, previous=None):
 def locked(run):
     if not run.is_dir():
         raise DispatchError("Run directory does not exist")
-    with (run / ".dispatch.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
+    with (run / ".dispatch.lock").open("a+b") as lock:
+        if os.name == "nt":
+            import time
+            lock.seek(0, os.SEEK_END)
+            if not lock.tell():
+                lock.write(b"\0")
+                lock.flush()
+            while True:
+                lock.seek(0)
+                try:
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as error:
+                    if error.errno not in (13, 36):
+                        raise
+                    time.sleep(0.05)
+        else:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def text_field(value, label, optional=False):

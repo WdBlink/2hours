@@ -146,6 +146,8 @@ class RetentionSettings:
                 "eligible_bytes": sum(row["bytes"] for row in rows if row["eligible"])}
 
     def cleanup(self, body):
+        if os.name == "nt":
+            raise ValueError("Windows 暂不支持安全的录音清理；录音已保留。")
         if set(body) != {"preview_id"} or not isinstance(body["preview_id"], str):
             raise ValueError("请先查看清理预览")
         self.read()
