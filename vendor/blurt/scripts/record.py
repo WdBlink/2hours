@@ -47,7 +47,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (BLURT_HOME, IS_LINUX, IS_MAC, IS_WIN, STATE_FILE, CommandLog, append_command, die, ffmpeg_bin, fix_tcl_env, fmt_ts,  # noqa: E402
-                     global_config, load_json, new_session_dir, probe_duration, run, save_json, update_global_config)
+                     global_config, has_link_component, load_json, new_session_dir, probe_duration, run, save_json, update_global_config)
 
 from _identity import (APP_BUNDLE, APP_NAME, BUNDLE_ID, EXECUTABLE, ICON, INSTALLED_APP,
                        PROJECT_FOLDER, TWO_HOURS, identity)
@@ -128,6 +128,9 @@ class MicRecorder:
     def __init__(self, mic: dict, path: Path, gate=None):
         import sounddevice as sd
         self.path, self.q, self.first_wall, self.overflows, self.frames = path, queue.Queue(), None, 0, 0
+        self.stopped = False
+        self.started = False
+        self.error = None
         self.gate = gate or (lambda: True)
         self.sr = mic.get("samplerate") or AUDIO_SR
         self.stream = sd.RawInputStream(samplerate=self.sr, channels=1, dtype="int16", device=mic["index"],
@@ -141,25 +144,41 @@ class MicRecorder:
             self.overflows += 1
         if self.gate():
             self.q.put(bytes(data))
+            self.frames += frames
 
     def _write(self):
-        with wave.open(str(self.path), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(self.sr)
-            while (chunk := self.q.get()) is not None:
-                w.writeframes(chunk)
-                self.frames += len(chunk) // 2
+        try:
+            with wave.open(str(self.path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(self.sr)
+                while (chunk := self.q.get()) is not None:
+                    w.writeframes(chunk)
+        except Exception as error:
+            self.error = error
 
     def start(self):
         self.writer.start()
-        self.stream.start()
+        try:
+            self.stream.start()
+            self.started = True
+        except Exception:
+            self.stop()
+            raise
 
     def stop(self):
-        self.stream.stop()
-        self.stream.close()
-        self.q.put(None)
-        self.writer.join()
+        if self.stopped:
+            return
+        self.stopped = True
+        try:
+            if self.started:
+                self.stream.stop()
+        finally:
+            self.stream.close()
+            self.q.put(None)
+            self.writer.join()
+        if self.error:
+            raise self.error
 
 
 # ---------------------------------------------------------------- video helpers (tk / ffmpeg engines)
@@ -412,6 +431,10 @@ def choose_engine(wanted: str | None) -> str:
             die("Two Hours needs macOS 13+ and Xcode Command Line Tools (xcode-select --install).")
         return "native"
     if wanted:
+        if wanted == "native" and not IS_MAC:
+            die("The native Swift recorder is available only on macOS; use --engine tk on Windows.")
+        if wanted == "tk" and not tk_available():
+            die("Tk is unavailable. Install Python with Tcl/Tk support, or select --engine ffmpeg.")
         return wanted
     if IS_MAC and native_binary(build=True):
         return "native"
@@ -447,9 +470,13 @@ def lang() -> str:
 def parse_region(s: str | None) -> list[int] | None:
     if not s:
         return None
-    p = [int(float(v)) for v in s.split(",")]
-    if len(p) != 4:
-        die("--region needs x,y,w,h")
+    try:
+        p = [int(float(v)) for v in s.split(",")]
+    except (ValueError, OverflowError):
+        die("--region needs finite numeric x,y,w,h")
+    if len(p) != 4 or p[2] < 2 or p[3] < 2:
+        die("--region needs x,y,w,h with width and height >= 2")
+    p[2:] = [size // 2 * 2 for size in p[2:]]
     return p
 
 
@@ -470,6 +497,8 @@ def cmd_start(a) -> None:
     session.mkdir(parents=True, exist_ok=True)
     cfg = global_config().get("record", {})
     engine = choose_engine(a.engine or cfg.get("engine"))
+    if engine != "native" and (getattr(a, "system_audio", False) or cfg.get("system_audio")):
+        die("System audio capture currently requires the native macOS engine; disable system_audio for Tk/ffmpeg.")
     if IS_WIN:
         ensure_app_installed()
     last = cfg.get("last_region")
@@ -517,7 +546,7 @@ def finish_session(session, result, meta):
     warning = result.get("warning", "")
     if result.get("incomplete") and not warning:
         warning = "录制异常结束，结尾可能丢失，请核对内容后再处理。"
-    if result.get("mic_enabled") is True and result.get("audio_buffers") == 0 and "麦克风" not in warning:
+    if result.get("mic_enabled") is True and (result.get("audio_buffers") == 0 or result.get("audio_frames") == 0) and "麦克风" not in warning:
         warning += " 未录到麦克风音频，不能据此确认用户口述。"
     if warning:
         result["warning"] = warning.strip()
@@ -536,13 +565,13 @@ def finish_session(session, result, meta):
 
 def recover_session(session):
     session = Path(session).expanduser().absolute()
-    if session.is_symlink() or not session.is_dir():
+    if has_link_component(session) or not session.is_dir():
         raise ValueError("recovery requires a real session directory")
     session = session.resolve()
     video, backup = session / "recording.mp4", session / "recording.original.mp4"
     for name in ("recording.mp4", "meta.json", "meta.json.tmp", "events.jsonl", "native-events.jsonl", ".cmd"):
         path = session / name
-        if path.is_symlink() or (path.exists() and not path.is_file()):
+        if has_link_component(path) or (path.exists() and not path.is_file()):
             raise ValueError(f"recovery refuses a non-regular file: {path}")
     if not video.is_file() or video.stat().st_size == 0:
         raise ValueError("no recording.mp4 data to recover; existing files were preserved")
@@ -557,14 +586,14 @@ def recover_session(session):
     if meta.get("event") == "cancelled" or meta.get("cancelled"):
         raise ValueError("cancelled recordings are not recovered")
     commands = session / ".cmd"
-    if commands.exists() and any(line.strip() == "discard" for line in commands.read_text().splitlines()):
+    if commands.exists() and any(line.strip() == "discard" for line in commands.read_text(encoding="utf-8").splitlines()):
         raise ValueError("discarded recordings are not recovered")
     terminal = {}
     for name in ("events.jsonl", "native-events.jsonl"):
         log = session / name
         if not log.exists():
             continue
-        for line in log.read_text().splitlines():
+        for line in log.read_text(encoding="utf-8").splitlines():
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -582,11 +611,7 @@ def recover_session(session):
         if not isinstance(state, dict) or type(state.get("pid")) is not int or state["pid"] <= 0 or not isinstance(state.get("session"), str):
             raise ValueError("cannot verify the active recording state")
         if Path(state["session"]).resolve() == session:
-            try:
-                os.kill(state["pid"], 0)
-            except ProcessLookupError:
-                pass
-            else:
+            if _alive(state["pid"]):
                 raise ValueError("session is still recording")
     if IS_MAC:
         processes = run(["/bin/ps", "-axww", "-o", "pid=", "-o", "command="], timeout=5).stdout
@@ -622,7 +647,7 @@ def recover_session(session):
                 and int(stream.get("nb_read_frames", 0)) > 0 for stream in streams):
             raise ValueError("recovered file has no decodable video")
         after = video.stat()
-        if video.is_symlink() or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+        if has_link_component(video) or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
                 after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
             raise ValueError("recording changed during recovery; existing files were preserved")
         os.link(video, backup, follow_symlinks=False)
@@ -783,7 +808,8 @@ def run_tk(session: Path, a, cfg, last, region, cmd_file: Path) -> dict:
     from tk_recorder import TkRecorder
     mic = None if a.no_mic else pick_mic(a.mic or cfg.get("mic"))
     rec = TkRecorder(session, mic, a.fps or cfg.get("fps", 30), a.max_width or cfg.get("max_width", 2560), lang(),
-                     a.countdown if a.countdown is not None else cfg.get("countdown", 3), last, region, cmd_file, out)
+                     a.countdown if a.countdown is not None else cfg.get("countdown", 3), last, region, cmd_file, out,
+                     max_minutes=a.max_minutes)
     result = rec.run()
     if result.get("event") == "stopped" and rec.region:
         result["region"] = rec.region
@@ -938,11 +964,29 @@ def cmd_test(a) -> None:
 
 
 def _alive(pid) -> bool:
-    if not pid:
+    if type(pid) is not int or pid <= 0:
         return False
     if IS_WIN:
-        res = run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], check=False).stdout
-        return str(pid) in res
+        # os.kill(pid, 0) terminates a process on Windows. Query a handle instead.
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            if ctypes.get_last_error() == 87:
+                return False
+            raise OSError(ctypes.get_last_error(), "Cannot verify recording process state")
+        try:
+            status = wintypes.DWORD()
+            if not kernel.GetExitCodeProcess(handle, ctypes.byref(status)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return status.value == 259
+        finally:
+            kernel.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return True

@@ -14,6 +14,13 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import stat
+import importlib.util
+
+if os.name == "nt":
+    _windows_spec = importlib.util.spec_from_file_location("dispatch_windows", Path(__file__).with_name("windows_files.py"))
+    windows_files = importlib.util.module_from_spec(_windows_spec)
+    _windows_spec.loader.exec_module(windows_files)
 
 
 INPUTS = ("manifest.json", "report.html", "routes.json")
@@ -25,6 +32,15 @@ SETTINGS_HOME = Path.home() / ".2hours"
 
 class DispatchError(ValueError):
     pass
+
+
+def is_link(path):
+    """Treat Windows junctions and other reparse points like symbolic links."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
 
 
 def now():
@@ -83,7 +99,7 @@ def dispatch_preferences(value):
 
 def current_opt_in(home=None):
     path = (home or SETTINGS_HOME) / "settings.json"
-    if any(part.is_symlink() for part in (path, *path.parents)):
+    if any(is_link(part) for part in (path, *path.parents)):
         raise DispatchError("Settings path must not contain symlinks")
     value = read_json(path) if path.exists() else {}
     preferences = dispatch_preferences(value)
@@ -93,7 +109,7 @@ def current_opt_in(home=None):
 
 
 def media_signature(path):
-    if any(part.is_symlink() for part in (path, *path.parents)) or not path.is_file():
+    if any(is_link(part) for part in (path, *path.parents)) or not path.is_file():
         raise DispatchError("Input must be a regular file without symlinks")
     value = path.stat()
     return [value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns]
@@ -139,13 +155,15 @@ def bind_input(run, source, consent, targets, previous=None):
 def locked(run):
     if not run.is_dir():
         raise DispatchError("Run directory does not exist")
-    with (run / ".dispatch.lock").open("a+b") as lock:
+    path = run / ".dispatch.lock"
+    if os.name == "nt" and any(is_link(part) for part in (path, *path.parents)):
+        raise DispatchError("Run directory or lock must not contain links")
+    opened = windows_files.secure_lock_file(path) if os.name == "nt" else path.open("a+b")
+    with opened as lock:
         if os.name == "nt":
             import time
-            lock.seek(0, os.SEEK_END)
-            if not lock.tell():
-                lock.write(b"\0")
-                lock.flush()
+            # Windows byte-range locks can extend beyond EOF. Leave empty files
+            # empty, so competing openers never write before acquiring the lock.
             while True:
                 lock.seek(0)
                 try:
@@ -209,7 +227,7 @@ def frame_path(run, value):
             or path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp")):
         return None
     candidate = run / "blurt" / path
-    if any(parent.is_symlink() for parent in (candidate, *candidate.parents) if parent != run.parent):
+    if any(is_link(parent) for parent in (candidate, *candidate.parents) if parent != run.parent):
         return None
     return candidate if candidate.is_file() and candidate.stat().st_size <= 16 * 1024 * 1024 else None
 

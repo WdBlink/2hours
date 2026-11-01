@@ -57,7 +57,7 @@ class RunTests(unittest.TestCase):
                 self.assertEqual(report["recorder"]["name"], "Two Hours")
                 self.assertEqual(report["recorder"]["bundle_id"], "dev.twohours.recorder")
                 self.assertEqual(report["recording_permissions"], "not_tested")
-                self.assertTrue(report["asr"][-1].endswith("vendor/blurt/scripts/doctor.py"))
+                self.assertEqual(Path(report["asr"][-1]), root / "vendor/blurt/scripts/doctor.py")
                 binary.unlink()
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):

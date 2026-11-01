@@ -58,7 +58,7 @@ def init(args):
     root.mkdir(parents=True, exist_ok=False, mode=0o700)
     manifest = {"run_id": root.name, "scope": scope, "sources": [], "panels": [],
                 "coverage": {"read": 0, "failures": [], "skipped": [], "status": "not_collected"}, "targets": []}
-    (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"run": str(root.resolve()), "scope": scope, "next": "Collect evidence with Traceink and Cubox; write manifest.json and report.md"}, ensure_ascii=False))
 
 
@@ -129,8 +129,8 @@ def render(args):
     root = Path(args.run).expanduser().resolve()
     if (root / "report.html").exists():
         raise ValueError("report already frozen; create a new run to change its content")
-    manifest = json.loads((root / "manifest.json").read_text())
-    markdown = (root / "report.md").read_text()
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    markdown = (root / "report.md").read_text(encoding="utf-8")
     validate_report(manifest, markdown)
     renderer = skill_dir("answer-me-with-html") / "scripts/am.mjs"
     if not renderer.is_file() or not shutil.which("node"):
@@ -138,10 +138,10 @@ def render(args):
     draft = root / "report.build.html"
     env = dict(os.environ, AM_NO_UPDATE_CHECK="1")
     completed = subprocess.run([shutil.which("node"), str(renderer), "render", str(root / "report.md"),
-                                "-o", str(draft), "--no-open"], cwd=root, env=env, capture_output=True, text=True, timeout=60)
+                                "-o", str(draft), "--no-open"], cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     if completed.returncode or not draft.is_file():
         raise ValueError("renderer failed: " + completed.stdout + completed.stderr)
-    html = draft.read_text()
+    html = draft.read_text(encoding="utf-8")
     actual = re.findall(r'<section\b[^>]*\bid="panel-([A-Z][0-9]{0,2})"', html)
     if actual != [p["id"] for p in manifest["panels"]]:
         draft.unlink()
@@ -150,7 +150,7 @@ def render(args):
         draft.replace(root / "report.am.html")
         subprocess.run([sys.executable, str(Path(__file__).with_name("build_board.py")),
                         "--run", str(root)], check=True, timeout=30)
-        html = (root / "report.html").read_text()
+        html = (root / "report.html").read_text(encoding="utf-8")
     else:
         draft.replace(root / "report.html")
     print(completed.stdout.strip())

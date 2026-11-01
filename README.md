@@ -34,9 +34,9 @@ $2hours 继续 /绝对路径/已有运行目录 中尚未分发的任务。
 
 ## 安装
 
-Windows 开发支持正在完善：报告与本地审核服务可原生运行，配置命令和已知限制见 [Windows 开发说明](references/windows-development.md)。录音清理、macOS 资源保护和实际采集仍有平台限制。
+Windows 已支持报告、审核、屏幕与麦克风录制、本地 SenseVoice 转录、安全清理和资源保护。安装与验证见 [Windows 开发说明](references/windows-development.md)。Windows 使用 Tk/ffmpeg，不需要 WSL 或 Swift；系统音频和 macOS 原生录制组件仍为 macOS 专属。
 
-需要 Python 3.10+、Node.js 20+、uv 和 ffmpeg。macOS 录制要求 macOS 13+ 及 Xcode Command Line Tools。Two Hours 自带录制组件，无需单独安装 Blurt；其他平台未做完整录制验证。
+需要 Python 3.10+、Node.js 20+、uv 和 ffmpeg。macOS 录制要求 macOS 13+ 及 Xcode Command Line Tools；Windows 使用 Tk/ffmpeg，已在 Windows 10 x64 验证屏幕与麦克风录制。Two Hours 自带录制组件，无需单独安装 Blurt；Linux 未做完整录制验证。
 
 从独立仓库安装一个 Skill 即可，四个组件的源码与所需资源已收入 `vendor/`，无需分别安装四份全局技能：
 

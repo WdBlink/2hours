@@ -101,6 +101,12 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.request("/review-state", update, {"X-2hours-Token": old_token})[0], 403)
         self.assertEqual(self.request("/review-state", update)[0], 200)
 
+    @unittest.skipUnless(os.name == "nt", "Windows process liveness")
+    def test_active_recording_queries_without_signalling_process(self):
+        self.review.state_file.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+        with patch.object(bridge.os, "kill", side_effect=AssertionError("must not signal")):
+            self.assertTrue(self.review.active_recording())
+
     def test_report_is_preview_only_and_preserves_csp(self):
         with patch.object(bridge.subprocess, "Popen") as popen:
             status, page = self.request("/")
@@ -159,9 +165,11 @@ class BridgeTests(unittest.TestCase):
 
     def test_active_recording_is_never_stopped_or_replaced(self):
         self.review.state_file.write_text(json.dumps({"pid": 123, "session": "other"}))
-        with patch.object(bridge.os, "kill", return_value=None) as kill, patch.object(bridge.subprocess, "Popen") as popen:
+        probe = bridge.settings.windows_files if os.name == "nt" else bridge.os
+        method = "process_alive" if os.name == "nt" else "kill"
+        with patch.object(probe, method, return_value=True) as alive, patch.object(bridge.subprocess, "Popen") as popen:
             self.assertEqual(self.request("/record", {})[0], 409)
-            kill.assert_called_once_with(123, 0)
+            alive.assert_called_once_with(*((123,) if os.name == "nt" else (123, 0)))
             popen.assert_not_called()
         self.assertTrue(self.review.state_file.exists())
 
@@ -528,8 +536,13 @@ class BridgeTests(unittest.TestCase):
         directory.mkdir(parents=True)
         (directory / "safe.png").write_bytes(b"\x89PNG\r\n\x1a\nimage")
         (directory / "unreferenced.png").write_bytes(b"\x89PNG\r\n\x1a\nother")
-        (directory / "linked.png").symlink_to(directory / "safe.png")
-        (self.run / "blurt/alias").symlink_to(directory, target_is_directory=True)
+        if os.name == "nt":
+            # Junctions exercise Windows reparse-point traversal without symlink privileges.
+            import _winapi
+            _winapi.CreateJunction(str(directory), str(self.run / "blurt/alias"))
+        else:
+            (directory / "linked.png").symlink_to(directory / "safe.png")
+            (self.run / "blurt/alias").symlink_to(directory, target_is_directory=True)
         frames = [{"path": path, "caption": "原始画面"} for path in (
             "frames/safe.png", "frames/linked.png", "frames/../frames/safe.png",
             str(directory / "safe.png"), "alias/safe.png", "frames/../../manifest.json")]

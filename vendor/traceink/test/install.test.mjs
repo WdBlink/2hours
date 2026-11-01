@@ -145,7 +145,7 @@ test("an identical symlink installation is a read-only no-op", async () => {
   const codexHome = await mkdtemp(path.join(os.tmpdir(), "traceink-symlink-same-"));
   const skills = path.join(codexHome, "skills");
   await mkdir(skills, { recursive: true });
-  await symlink(path.join(repoRoot, "skill"), path.join(skills, "traceink"));
+  await symlink(path.join(repoRoot, "skill"), path.join(skills, "traceink"), process.platform === "win32" ? "junction" : "dir");
 
   const result = run(["install"], codexHome);
   assert.equal(result.status, 0, result.stderr);
@@ -159,7 +159,7 @@ test("refuses to replace a different symlink even with force", async () => {
   await mkdir(skills, { recursive: true });
   await writeFile(path.join(other, "SKILL.md"), "other skill\n", "utf8");
   const target = path.join(skills, "traceink");
-  await symlink(other, target);
+  await symlink(other, target, process.platform === "win32" ? "junction" : "dir");
 
   const result = run(["install", "--force"], codexHome);
   assert.notEqual(result.status, 0);
