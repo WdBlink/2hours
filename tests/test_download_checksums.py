@@ -21,10 +21,12 @@ INSTALL_JS = ROOT / 'vendor' / 'cubox' / 'cli' / 'scripts' / 'install.js'
 def load_transcribe():
     sys.path.insert(0, str(BLURT_SCRIPTS))
     try:
-        # download() does not use numpy; stub it when the optional dependency is absent.
-        stub = {} if importlib.util.find_spec('numpy') else {'numpy': types.ModuleType('numpy')}
-        with mock.patch.dict(sys.modules, stub):
-            sys.modules.pop('transcribe', None)
+        sys.modules.pop('transcribe', None)
+        if importlib.util.find_spec('numpy'):
+            # Use the real numpy and leave sys.modules alone: numpy 2.x refuses a second load per process.
+            return importlib.import_module('transcribe')
+        # download() does not use numpy; stub it only when the optional dependency is absent.
+        with mock.patch.dict(sys.modules, {'numpy': types.ModuleType('numpy')}):
             return importlib.import_module('transcribe')
     finally:
         sys.path.remove(str(BLURT_SCRIPTS))
