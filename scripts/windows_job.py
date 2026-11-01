@@ -7,6 +7,7 @@ stdin is DEVNULL, matching the resource guard's Unix behavior.
 import ctypes
 from ctypes import wintypes
 import os
+import math
 import subprocess
 import sys
 import time
@@ -51,6 +52,12 @@ def _kernel():
     api.AssignProcessToJobObject.restype = wintypes.BOOL
     api.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
     api.TerminateJobObject.restype = wintypes.BOOL
+    api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    api.OpenProcess.restype = wintypes.HANDLE
+    api.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+    api.IsProcessInJob.restype = wintypes.BOOL
+    api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    api.WaitForSingleObject.restype = wintypes.DWORD
     api.CloseHandle.argtypes = [wintypes.HANDLE]
     api.CloseHandle.restype = wintypes.BOOL
     return api
@@ -126,17 +133,49 @@ class JobProcess:
             capacity = max(capacity * 2, info.assigned + 16)
 
     def stop(self):
+        if not self.job:
+            return
+        handles = []
         try:
-            if self.job and not self.api.TerminateJobObject(self.job, 1):
+            # Pin the actual process objects before requesting termination.
+            # Job membership can empty before every process object signals;
+            # PID existence alone also cannot distinguish delayed teardown or
+            # PID reuse from live execution.
+            for pid in self.pids():
+                handle = self.api.OpenProcess(0x100000 | 0x1000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+                if not handle:
+                    error = ctypes.get_last_error()
+                    if error == 87:  # ERROR_INVALID_PARAMETER: process already exited
+                        continue
+                    raise ctypes.WinError(error)
+                handles.append(handle)
+                member = wintypes.BOOL()
+                if not self.api.IsProcessInJob(handle, self.job, ctypes.byref(member)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if not member.value:  # PID was reused after the membership snapshot.
+                    handles.pop()
+                    self.api.CloseHandle(handle)
+            if not self.api.TerminateJobObject(self.job, 1):
                 raise ctypes.WinError(ctypes.get_last_error())
-            self.process.wait(timeout=10)
             deadline = time.monotonic() + 10
+            self.process.wait(timeout=max(0, deadline - time.monotonic()))
+            for handle in handles:
+                remaining_ms = max(0, math.ceil((deadline - time.monotonic()) * 1000))
+                status = self.api.WaitForSingleObject(handle, remaining_ms)
+                if status == 258:  # WAIT_TIMEOUT
+                    raise TimeoutError("Windows stage process did not terminate")
+                if status != 0:  # WAIT_OBJECT_0 is the process-terminated signal.
+                    raise ctypes.WinError(ctypes.get_last_error())
             while self.pids():
                 if time.monotonic() >= deadline:
                     raise TimeoutError("Windows stage job did not empty after termination")
                 time.sleep(0.02)
         finally:
-            self.close()
+            try:
+                self.close()
+            finally:
+                for handle in handles:
+                    self.api.CloseHandle(handle)
 
     def close(self):
         if self.job:

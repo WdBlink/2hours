@@ -1,4 +1,5 @@
 import argparse
+import ctypes
 import importlib.util
 import json
 import os
@@ -29,6 +30,19 @@ def args(directory, command=None):
 
 
 class GuardTests(unittest.TestCase):
+    def windows_process_handle(self, pid):
+        api = guard._job_module._kernel()
+        handle = api.OpenProcess(0x100000 | 0x1000, False, pid)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return api, handle
+
+    def assert_windows_terminated(self, api, handle):
+        # A process handle is signaled only after termination. Unlike a PID
+        # lookup this still identifies the same child after PID reuse and does
+        # not require its process object to have disappeared from enumeration.
+        self.assertEqual(api.WaitForSingleObject(handle, 0), 0)
+
     def test_warning_blocks_spawn_and_preserves_existing_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -66,20 +80,30 @@ class GuardTests(unittest.TestCase):
             command = [sys.executable, "-c", "import subprocess,sys,time; from pathlib import Path; "
                        "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)']); "
                        "Path(%r).write_text(str(p.pid)); time.sleep(20)" % str(marker)]
+            child_handles = []
+
+            def check_pressure():
+                if not marker.exists():
+                    return sample()
+                if os.name == "nt" and not child_handles:
+                    child_handles.append(self.windows_process_handle(int(marker.read_text())))
+                return sample(2)
+
             try:
-                result = guard.run_stage(args(root / "guard", command), lambda: sample(2 if marker.exists() else 1))
+                result = guard.run_stage(args(root / "guard", command), check_pressure)
                 self.assertEqual(result, guard.PAUSED)
                 self.assertIsNone(unrelated.poll())
                 child = int(marker.read_text())
                 if os.name == "nt":
-                    import psutil
-                    self.assertFalse(psutil.pid_exists(child))
+                    self.assert_windows_terminated(*child_handles[0])
                 else:
                     state = subprocess.run(["ps", "-p", str(child), "-o", "state="], capture_output=True, text=True).stdout.strip()
                     self.assertTrue(not state or state.startswith("Z"), state)
             finally:
                 unrelated.terminate()
                 unrelated.wait()
+                for api, handle in child_handles:
+                    api.CloseHandle(handle)
 
     def test_successful_work_really_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -129,7 +153,6 @@ class GuardTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "native Windows job isolation")
     def test_job_membership_survives_parent_exit_and_closing_kills_orphan(self):
-        import psutil
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             marker = root / "child.pid"
@@ -138,17 +161,24 @@ class GuardTests(unittest.TestCase):
                        "Path(%r).write_text(str(p.pid))" % str(marker)]
             with (root / "log").open("w") as log:
                 process = guard.WindowsJobProcess(command, log)
+                child_handle = None
                 try:
                     self.assertEqual(process.wait(timeout=10), 0)
                     child = int(marker.read_text())
+                    api, child_handle = self.windows_process_handle(child)
                     self.assertIn(child, process.pids())
                     sampler = guard.Sampler()
                     sampler.set_stage(process)
                     record = next(p for p in sampler()["processes"] if p["pid"] == child)
                     self.assertEqual(record["pgid"], process.pid)
                 finally:
-                    process.stop()
-            self.assertFalse(psutil.pid_exists(child))
+                    try:
+                        process.stop()
+                        if child_handle:
+                            self.assert_windows_terminated(api, child_handle)
+                    finally:
+                        if child_handle:
+                            api.CloseHandle(child_handle)
 
     @unittest.skipUnless(os.name == "nt", "native Windows memory gate")
     def test_native_stage_memory_limit_stops_only_the_stage(self):
