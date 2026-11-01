@@ -11,7 +11,7 @@ description: "集中审阅与任务分发入口。按日期回看 Codex 工作�
 
 Windows 首次在技能目录执行 `powershell -NoProfile -ExecutionPolicy Bypass -File SKILL/scripts/windows-dev.ps1 setup`，需要代理时追加 `-Proxy http://127.0.0.1:端口`。此命令不会采集屏幕或声音。之后用 `SKILL/.venv/Scripts/python.exe` 替代本文中的 `python3`；PowerShell 回合设置 `$env:PYTHONUTF8='1'`。录制、转录与抽帧脚本自动发现 winget 安装的 ffmpeg。
 
-Windows 使用 Tk 选择器和控制条，不执行 Swift 构建或 macOS 授权步骤；只在用户主动开始时录制。转录、扫描、抽帧同样通过资源守护器串行执行，使用 Windows Job Object 隔离。完整操作见 [Windows 开发说明](references/windows-development.md)。
+Windows 使用 Tk 选择器和控制条，不执行 Swift 构建或 macOS 授权步骤；只在用户主动开始时录制。转录、扫描、抽帧同样通过资源守护器串行执行，在 Windows Job Object 中运行：目标及其直接派生的子孙进程会在守护器关闭 Job 时一并结束；经 WMI、计划任务、COM 或服务等 Job 之外的代理启动的进程不受此约束。完整操作见 [Windows 开发说明](references/windows-development.md)。
 
 Cubox 为可选来源：未配置账号时明确列为 `not_configured`，仍可审阅 Codex 工作；不将登录缺失记为“没有新增收藏”，不要求用户创建账号。
 
