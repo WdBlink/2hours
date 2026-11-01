@@ -5,7 +5,6 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from unittest import mock
 
@@ -13,6 +12,9 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'dispatch.py'
 SPEC = importlib.util.spec_from_file_location('platform_dispatch', SCRIPT)
 dispatch = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(dispatch)
+
+
+WAITER_BOUND_SECONDS = 15
 
 
 class PlatformLockTests(unittest.TestCase):
@@ -54,13 +56,36 @@ with d.locked(pathlib.Path(sys.argv[2])):
 '''
             holder = subprocess.Popen([sys.executable, '-c', code, str(SCRIPT), directory], stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            waiter_code = '''import importlib.util, pathlib, sys, time
+s = importlib.util.spec_from_file_location('d', sys.argv[1])
+d = importlib.util.module_from_spec(s)
+s.loader.exec_module(d)
+started = time.monotonic()
+try:
+    with d.locked(pathlib.Path(sys.argv[2]), timeout=0.3):
+        print('acquired', flush=True)
+except d.DispatchError as error:
+    print('elapsed=%.3f' % (time.monotonic() - started), flush=True)
+    print('error=' + str(error), flush=True)
+'''
             try:
                 self.assertEqual(holder.stdout.readline().strip(), 'held')
-                started = time.monotonic()
-                with self.assertRaisesRegex(dispatch.DispatchError, 'Timed out after 0.3s waiting for lock'):
-                    with dispatch.locked(Path(directory), timeout=0.3):
-                        self.fail('lock acquired while another process holds it')
-                self.assertLess(time.monotonic() - started, 5)
+                # The waiter runs in its own process with a hard bound, so a regression in the
+                # timeout logic fails this test instead of hanging the whole suite.
+                waiter = subprocess.Popen([sys.executable, '-c', waiter_code, str(SCRIPT), directory],
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    output, error = waiter.communicate(timeout=WAITER_BOUND_SECONDS)
+                except subprocess.TimeoutExpired:
+                    waiter.kill()
+                    waiter.communicate()
+                    self.fail(f'lock waiter still blocked after {WAITER_BOUND_SECONDS}s; lock timeout not enforced')
+                self.assertEqual(waiter.returncode, 0, error)
+                self.assertNotIn('acquired', output)
+                self.assertIn('error=Timed out after 0.3s waiting for lock', output)
+                elapsed = float(output.split('elapsed=')[1].split()[0])
+                self.assertGreaterEqual(elapsed, 0.3)
+                self.assertLess(elapsed, 5)
             finally:
                 holder.communicate(input='', timeout=10)
             self.assertEqual(holder.returncode, 0)
