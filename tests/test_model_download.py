@@ -90,13 +90,14 @@ def child_env(home: Path) -> dict:
 class FakeResponse(io.BytesIO):
     """cut: give only the first `cut` bytes and end (HTTPResponse.read(n) returns short data here, no IncompleteRead)."""
 
-    def __init__(self, body: bytes, status=200, length=None, cut=None, start=None):
+    def __init__(self, body: bytes, status=200, length=None, cut=None, start=None, total=None):
         super().__init__(body if cut is None else body[:cut])
         self.status = status
         self.headers = {} if length is False else {'content-length': str(len(body) if length is None else length)}
         if status == 206:
             first = len(DATA) - len(body) if start is None else start
-            self.headers['content-range'] = f'bytes {first}-{len(DATA) - 1}/{len(DATA)}'
+            total = len(DATA) if total is None else total
+            self.headers['content-range'] = f'bytes {first}-{total - 1}/{total}'
 
     def getcode(self):
         return self.status
@@ -110,11 +111,13 @@ class FakeResponse(io.BytesIO):
 
 class FakeServer:
     """ranges=False ignores Range (200, whole file). bad_start reports a 206 whose Content-Range starts elsewhere.
-    wrong=True answers a request from 0 with WRONG: a bad mirror that has the right length."""
+    wrong=True answers a request from 0 with WRONG: a bad mirror that has the right length.
+    ahead=N answers a Range request with a truthful 206 that starts N bytes past the requested offset.
+    short_total=N answers a Range request with a 206 whose Content-Range total is N bytes too small (the body is right)."""
 
-    def __init__(self, ranges=True, cut=None, no_length=False, bad_start=False, wrong=False):
+    def __init__(self, ranges=True, cut=None, no_length=False, bad_start=False, wrong=False, ahead=0, short_total=0):
         self.ranges, self.cut, self.no_length, self.bad_start = ranges, cut, no_length, bad_start
-        self.wrong = wrong
+        self.wrong, self.ahead, self.short_total = wrong, ahead, short_total
         self.requests: list[dict] = []
 
     def __call__(self, req, timeout=None):
@@ -126,6 +129,13 @@ class FakeServer:
         if start and self.bad_start:
             self.requests.append({'range': rng, 'status': 206, 'sent': len(DATA)})
             return FakeResponse(DATA, 206, start=0)
+        if start and self.ahead and start + self.ahead < len(DATA):
+            first = start + self.ahead
+            self.requests.append({'range': rng, 'status': 206, 'sent': len(DATA) - first})
+            return FakeResponse(DATA[first:], 206, start=first)
+        if start and self.short_total:
+            self.requests.append({'range': rng, 'status': 206, 'sent': len(DATA) - start})
+            return FakeResponse(DATA[start:], 206, start=start, total=len(DATA) - self.short_total)
         body = (WRONG if self.wrong and not start else DATA)[start:]
         sent = len(body) if self.cut is None else min(self.cut, len(body))
         self.requests.append({'range': rng, 'status': 206 if start else 200, 'sent': sent})
@@ -158,6 +168,12 @@ class DownloadCase(Isolated):
         with mock.patch.object(urllib.request, 'urlopen', side_effect=server), \
                 mock.patch('sys.stderr', new_callable=io.StringIO):
             return T.download(REL)
+
+    def download_with_log(self, server):
+        """download(), also returning what it wrote to stderr."""
+        with mock.patch.object(urllib.request, 'urlopen', side_effect=server), \
+                mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+            return T.download(REL), err.getvalue()
 
     def try_download(self, server):
         try:
@@ -230,6 +246,34 @@ class SingleProcess(DownloadCase):
         self.download(s)
         self.assert_installed_ok()
         self.assertIsNone(s.requests[-1]['range'])
+
+    # a truthful 206 that starts past the end of .part (bytes MB-... asked, 2 MB-... sent) must not be appended:
+    # the same source is asked again from 0 and the download succeeds in this run
+    def test_partial_response_starting_past_partial_restarts_from_zero(self):
+        for sizes in (None, {SHA: len(DATA)}):
+            with self.subTest(sized=bool(sizes)):
+                self.one_source(sizes)
+                for leftover in (self.dest, self.part, T._marker(self.dest)):
+                    leftover.unlink(missing_ok=True)
+                self.part.write_bytes(DATA[:MB])
+                s = FakeServer(ahead=MB)
+                _, log = self.download_with_log(s)
+                self.assert_installed_ok()
+                self.assertEqual([(r['range'], r['status']) for r in s.requests], [(f'bytes={MB}-', 206), (None, 200)])
+                self.assertNotIn('incomplete', log)
+                self.assertFalse(self.part.exists())
+
+    # no pinned size, a 206 whose Content-Range total is smaller than what it sends: the response contradicts
+    # itself, so the resumed file is not trusted even if its hash would match; the same source is asked from 0
+    def test_partial_response_longer_than_its_content_range_total_restarts_from_zero(self):
+        self.one_source()
+        self.part.write_bytes(DATA[:MB])
+        s = FakeServer(short_total=100)
+        _, log = self.download_with_log(s)
+        self.assert_installed_ok()
+        self.assertEqual([(r['range'], r['status']) for r in s.requests], [(f'bytes={MB}-', 206), (None, 200)])
+        self.assertIn(f'got {len(DATA)} bytes, expected {len(DATA) - 100}', log)
+        self.assertFalse(self.part.exists())
 
     # a source that cannot be reached leaves a good .part alone; the next source resumes it
     def test_unreachable_source_keeps_partial_for_next_source(self):
@@ -380,6 +424,60 @@ class InstalledFile(DownloadCase):
         self.download(FakeServer())
         self.assert_installed_ok()
 
+    # pinned size and an installed file of another size: moved aside on size alone, never read. Hashing it would
+    # cost a full read of a large file, and an unreadable one (POSIX, not root) would crash the download instead
+    def test_existing_file_with_wrong_pinned_size_is_replaced_without_reading_it(self):
+        self.one_source({SHA: len(DATA)})
+        self.dest.write_bytes(DATA + b'x')
+        bad = self.dest.with_name(self.dest.name + '.bad')
+        if os.name == 'posix' and os.geteuid() != 0:
+            self.dest.chmod(0)
+            self.addCleanup(lambda: bad.exists() and bad.chmod(0o600))
+        with mock.patch.object(T, '_sha256_file', wraps=T._sha256_file) as sha:
+            self.download(FakeServer())
+        self.assertNotIn(self.dest, [Path(c.args[0]) for c in sha.call_args_list], 'a wrong-size file was hashed')
+        self.assert_installed_ok()
+        self.assertEqual(bad.stat().st_size, len(DATA) + 1)
+
+    # a verified file is replaced by wrong bytes and every source fails: the old marker must go with the old file,
+    # so a later wrong file with the old size and mtime is hashed, not trusted
+    def test_failed_redownload_removes_old_marker(self):
+        self.download(FakeServer())
+        old = json.loads(T._marker(self.dest).read_text())
+        self.dest.write_bytes(WRONG)
+        os.utime(self.dest, ns=(old['mtime_ns'], old['mtime_ns'] + 2_000_000_000))
+
+        def unreachable(req, timeout=None):
+            raise urllib.error.URLError('connection refused')
+        with self.assertRaises(SystemExit):
+            self.download(unreachable)
+        self.assertFalse(self.dest.exists())
+        self.assertFalse(T._marker(self.dest).exists(), 'the marker of the moved-aside file is still there')
+        self.dest.write_bytes(WRONG)                                     # same size as the old marker
+        os.utime(self.dest, ns=(old['mtime_ns'], old['mtime_ns']))       # and the same mtime
+        s = FakeServer()
+        with mock.patch.object(T.hashlib, 'sha256', wraps=hashlib.sha256) as sha:
+            self.download(s)
+        self.assertTrue(sha.called, 'a file matching a stale marker was returned without hashing')
+        self.assert_installed_ok()
+        self.assertEqual([r['range'] for r in s.requests], [None])
+
+    # no pinned size for the source: a verified file truncated with its mtime restored must be hashed again
+    def test_truncated_verified_file_without_pinned_size_is_checked_again(self):
+        self.assertEqual(T.MODEL_SIZES, {})
+        self.download(FakeServer())
+        st = self.dest.stat()
+        with open(self.dest, 'r+b') as f:
+            f.truncate(MB)
+        os.utime(self.dest, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual(self.dest.stat().st_mtime_ns, json.loads(T._marker(self.dest).read_text())['mtime_ns'])
+        s = FakeServer()
+        with mock.patch.object(T.hashlib, 'sha256', wraps=hashlib.sha256) as sha:
+            self.download(s)
+        self.assertTrue(sha.called, 'a truncated file was trusted by its marker')
+        self.assert_installed_ok()
+        self.assertEqual(self.dest.with_name(self.dest.name + '.bad').read_bytes(), DATA[:MB])
+
     def test_every_pinned_source_has_a_size(self):
         T.MODEL_FILES = self._real_files
         T.MODEL_SIZES = self._real_sizes
@@ -413,6 +511,8 @@ class Lock(Isolated):
                 T.download(REL)
         self.assertLess(time.monotonic() - started, 10)
         self.assertIn('Timed out', err.getvalue())
+        self.assertIn(f'waiting for another process downloading {REL}', err.getvalue(),
+                      'nothing is printed while waiting for the lock')
         self.assertEqual(s.requests, [], 'nothing may be fetched without the lock')
         self.assertFalse((self.models / REL).exists())
 
