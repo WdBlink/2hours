@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
@@ -6,6 +7,30 @@ const os = require("os");
 const VERSION = require("../package.json").version;
 const REPO = "OLCUBO/cubox-cli";
 const NAME = "cubox-cli";
+
+// SHA-256 of the official release assets. Source: GitHub release asset
+// digests for OLCUBO/cubox-cli v1.0.10 (gh release view v1.0.10), re-checked
+// against freshly downloaded files on 2026-11-02. A version or archive that is
+// not listed here is refused instead of installed unverified.
+const SHA256 = {
+  "cubox-cli-1.0.10-darwin-amd64.tar.gz": "6808c88ce346297d8a56f17c2ff566e43263f138342788ab2368aae393227918",
+  "cubox-cli-1.0.10-darwin-arm64.tar.gz": "59ebcdf50f1fe03bbad808ee1d565bde449eafab64dd39dd037884819343ec2f",
+  "cubox-cli-1.0.10-linux-amd64.tar.gz": "01ce2d69259ff5b95a036841d5ed1c4cf9bcc4079b5f47d2bdd22f9bb28b8f17",
+  "cubox-cli-1.0.10-linux-arm64.tar.gz": "99ac46075556c8a572dac03353a486a7da8302ec188b0fe8dee39fcde6677747",
+  "cubox-cli-1.0.10-windows-amd64.zip": "acc46abea971f824f346f2bcfdd06a1a3565e4f396b2ce5c89a1692c99e1be94",
+  "cubox-cli-1.0.10-windows-arm64.zip": "c2355b42bcce72d8effc7aefbf5b32c204c072f2a4fb39076fd602268240a3c2",
+};
+
+function verifyArchive(filePath, name) {
+  const expected = SHA256[name];
+  if (!expected) {
+    throw new Error(`No pinned SHA-256 for ${name}; refusing to install an unverified binary`);
+  }
+  const actual = crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  if (actual !== expected) {
+    throw new Error(`SHA-256 mismatch for ${name}: expected ${expected}, got ${actual}`);
+  }
+}
 
 const PLATFORM_MAP = {
   darwin: "darwin",
@@ -17,6 +42,11 @@ const ARCH_MAP = {
   x64: "amd64",
   arm64: "arm64",
 };
+
+module.exports = { SHA256, verifyArchive };
+if (require.main !== module) {
+  return;
+}
 
 const platform = PLATFORM_MAP[process.platform];
 const arch = ARCH_MAP[process.arch];
@@ -52,6 +82,7 @@ function install() {
 
   try {
     download(GITHUB_URL, archivePath);
+    verifyArchive(archivePath, archiveName);
 
     if (isWindows) {
       execSync(

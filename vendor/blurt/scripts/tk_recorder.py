@@ -210,7 +210,7 @@ class Picker:
 # ------------------------------------------------------------------ recorder
 class TkRecorder:
     def __init__(self, session: Path, mic: dict | None, fps: int, max_width: int, lang: str, countdown: int,
-                 last_region: list | None, region: list | None, command_file: Path, on_event):
+                 last_region: list | None, region: list | None, command_file: Path, on_event, max_minutes=120):
         self.session, self.mic, self.fps, self.max_width = session, mic, fps, max_width
         self.lang, self.countdown_n, self.last_region, self.fixed_region = lang, countdown, last_region, region
         self.command_log, self.on_event = CommandLog(command_file), on_event
@@ -223,6 +223,8 @@ class TkRecorder:
         self.seg_started = None
         self.events = []
         self.result = None
+        self.max_minutes = max_minutes
+        self.started_wall = None
 
     def t(self, a, b):
         return a if zh(self.lang) else b
@@ -240,6 +242,7 @@ class TkRecorder:
         enable_dpi_awareness()
         self.root = tk.Tk()
         self.root.withdraw()
+        self.root.report_callback_exception = self.callback_error
         self.on_event({"event": "ready", "engine": "tk"})
         if self.fixed_region:
             self.root.after(10, lambda: self.selected(self.fixed_region))
@@ -247,8 +250,22 @@ class TkRecorder:
             Picker(self.root, self.lang, self.last_region, self.selected)
         self.root.after(300, self.poll_commands)
         self.start_hotkeys()
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        finally:
+            self.root.destroy()
         return self.result or {"event": "cancelled"}
+
+    def callback_error(self, kind, error, traceback):
+        """Tk otherwise prints callback failures and leaves a dead recording window running."""
+        self.result = {"event": "error", "code": "capture_failed", "message": str(error)}
+        try:
+            if self.segments and self.seg_started is not None:
+                self.end_segment()
+            if self.audio:
+                self.audio.stop()
+        finally:
+            self.root.quit()
 
     def selected(self, region):
         if not region:
@@ -301,6 +318,7 @@ class TkRecorder:
         tick(n)
 
     def begin(self):
+        self.started_wall = time.monotonic()
         self.show_chrome()
         if self.mic:
             from record import MicRecorder
@@ -357,6 +375,12 @@ class TkRecorder:
 
     def tick(self, gen=0):
         if self.result or gen != getattr(self, "gen", 0):
+            return
+        if self.segments and not self.paused and self.segments[-1]["proc"].poll() is not None:
+            self.callback_error(RuntimeError, RuntimeError("Video capture stopped; inspect the segment log."), None)
+            return
+        if self.max_minutes and self.started_wall is not None and time.monotonic() - self.started_wall >= self.max_minutes * 60:
+            self.stop()
             return
         s = int(self.elapsed())
         self.clock.config(text=f"{s // 60:02d}:{s % 60:02d}" if s < 3600 else f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}")
@@ -502,7 +526,8 @@ class TkRecorder:
         a0 = self.audio.first_wall if self.audio else None
         for i, seg in enumerate(self.segments):
             if not seg["video"].exists() or seg["video"].stat().st_size == 0:
-                continue
+                return {"event": "error", "code": "missing_segment",
+                        "message": f"Recording segment {i + 1} is missing or empty; existing materials were preserved."}
             v0 = first_frame_wall(seg["log"]) or seg["wall_start"]
             part = self.session / f"part{i:02d}.mp4"
             cmd = [ffmpeg_bin(), "-nostdin", "-loglevel", "error", "-y", "-i", str(seg["video"])]
@@ -513,7 +538,8 @@ class TkRecorder:
                 lead = v0 - aw                       # >0: audio began before the first video frame
                 ss = seg["audio_from"] / sr + max(0.0, lead)
                 af = "anull" if lead >= 0 else f"adelay={int(-lead * 1000)}:all=1"
-                cmd += ["-ss", f"{ss:.3f}", "-t", f"{n / sr - max(0.0, lead):.3f}", "-i", str(self.session / "audio.wav"),
+                duration = max(0.001, n / sr - max(0.0, lead))
+                cmd += ["-ss", f"{ss:.3f}", "-t", f"{duration:.3f}", "-i", str(self.session / "audio.wav"),
                         "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", af, "-c:a", "aac", "-b:a", "96k",
                         "-ac", "1", "-ar", "48000"]
             else:
@@ -522,30 +548,34 @@ class TkRecorder:
             r = run(cmd, check=False)
             if r.returncode == 0:
                 parts.append(part)
+            else:
+                return {"event": "error", "code": "segment_mux_failed", "message": r.stderr[-1000:]}
         if not parts:
             return {"event": "error", "code": "no_frames", "message": "no video captured"}
         final = self.session / "recording.mp4"
         lst = self.session / "parts.txt"
         lst.write_text("".join(f"file '{p.name}'\n" for p in parts), encoding="utf-8")
-        run([ffmpeg_bin(), "-nostdin", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst),
-             "-c", "copy", "-movflags", "+faststart", str(final)], check=False)
+        joined = run([ffmpeg_bin(), "-nostdin", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst),
+                      "-c", "copy", "-movflags", "+faststart", str(final)], check=False)
+        if joined.returncode or not final.is_file() or not final.stat().st_size:
+            return {"event": "error", "code": "concat_failed", "message": joined.stderr[-1000:]}
         for p in [*parts, lst, *(s["video"] for s in self.segments), *(s["log"] for s in self.segments)]:
             Path(p).unlink(missing_ok=True)
         with open(self.session / "events.jsonl", "w", encoding="utf-8") as fh:
             for e in self.events:
                 fh.write(json.dumps(e) + "\n")
         return {"event": "stopped", "file": str(final), "duration": round(self.elapsed_before, 2),
+                "mic_enabled": self.audio is not None, "audio_frames": self.audio.frames if self.audio else 0,
                 "audio_overflows": self.audio.overflows if self.audio else None}
 
     # --- external control: record.py stop/pause/resume/marker, hotkeys
     def poll_commands(self):
         if self.result:
             return
-        try:
-            for c in self.command_log.read():
-                self.command(c)
-        except Exception:
-            pass
+        for c in self.command_log.read():
+            self.command(c)
+            if self.result:
+                return
         self.root.after(250, self.poll_commands)
 
     def command(self, c: str):

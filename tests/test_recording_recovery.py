@@ -175,10 +175,30 @@ class RecordingRecoveryTests(unittest.TestCase):
     def test_symlinked_source_is_rejected(self):
         other = self.root / "external.mp4"
         self.video.rename(other)
-        self.video.symlink_to(other)
+        try:
+            self.video.symlink_to(other)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest("Windows symlink creation requires Developer Mode or symlink privilege")
+            raise
         with self.assertRaisesRegex(ValueError, "non-regular"):
             self.recover()
         self.assertEqual(other.read_bytes(), b"original fragmented video")
+
+    @unittest.skipUnless(os.name == "nt", "Windows directory junctions")
+    def test_junction_session_or_parent_is_rejected(self):
+        import _winapi
+        junction = self.root / "junction"
+        _winapi.CreateJunction(str(self.session), str(junction))
+        self.addCleanup(lambda: junction.rmdir() if junction.exists() else None)
+        with self.assertRaisesRegex(ValueError, "real session directory"), patch.object(record, "run") as command:
+            record.recover_session(junction)
+        command.assert_not_called()
+        nested = self.session / "nested"
+        nested.mkdir()
+        with self.assertRaisesRegex(ValueError, "real session directory"):
+            record.recover_session(junction / "nested")
+        self.assertEqual(self.video.read_bytes(), b"original fragmented video")
 
     def test_failed_native_start_recovers_through_done_protocol(self):
         self.video.unlink()

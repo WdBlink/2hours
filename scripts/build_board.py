@@ -84,9 +84,9 @@ def build(run):
     run = Path(run).resolve()
     if (run / 'report.html').exists():
         raise ValueError('report already frozen; create a new run')
-    manifest = json.loads((run / 'manifest.json').read_text())
-    data = json.loads((run / 'board.json').read_text())
-    source = (run / 'report.am.html').read_text()
+    manifest = json.loads((run / 'manifest.json').read_text(encoding="utf-8"))
+    data = json.loads((run / 'board.json').read_text(encoding="utf-8"))
+    source = (run / 'report.am.html').read_text(encoding="utf-8")
     parser = PanelExtractor(source)
     parser.feed(source)
     parser.close()
@@ -115,8 +115,8 @@ def build(run):
             raise ValueError('unknown board lane')
         areas[c['id']] = area
     assets = Path(__file__).resolve().parent.parent / 'assets'
-    css = (assets / 'board.css').read_text()
-    js = (assets / 'board.js').read_text()
+    css = (assets / 'board.css').read_text(encoding="utf-8")
+    js = (assets / 'board.js').read_text(encoding="utf-8")
     digest = base64.b64encode(hashlib.sha256(js.encode()).digest()).decode()
     mark = base64.b64encode((assets / 'brand/mark.svg').read_bytes()).decode()
     icon = base64.b64encode((assets / 'brand/icon.png').read_bytes()).decode()
@@ -165,7 +165,7 @@ def build(run):
 <dialog id="review-window" class="review-window" aria-labelledby="window-label"><header class="window-bar"><h2 class="window-heading"><span id="window-label"></span><span class="window-context"></span></h2><button class="window-close" type="button" aria-label="关闭详情，返回看板" title="关闭（Esc）"><span aria-hidden="true">×</span></button></header><div class="window-content"></div></dialog>
 <dialog id="notes-window" class="review-window" aria-labelledby="notes-label"><header class="window-bar"><h2 id="notes-label" class="window-heading"><span id="notes-title">汇总意见</span><span class="window-context">保存意见 → 提交整理 → 集中审核 · 最后确认一次</span></h2><button class="window-close" type="button" aria-label="收起意见与审核，保留草稿" title="收起（Esc）"><span aria-hidden="true">×</span></button></header><div id="notes-content" class="window-content"></div></dialog>
 <div id="panel-store" hidden>{''.join(parser.panels.values())}</div><script>{js}</script></body></html>'''
-    with (run / 'report.html').open('x') as file:
+    with (run / 'report.html').open('x', encoding='utf-8') as file:
         file.write(content)
     return run / 'report.html'
 

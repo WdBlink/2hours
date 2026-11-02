@@ -11,9 +11,11 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
 import shutil
 import subprocess
 import threading
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import webbrowser
@@ -79,8 +81,8 @@ class ReviewRun:
             raise ValueError("报告 panel ID 与 manifest 不匹配")
         self.token = secrets.token_urlsafe(32)
         assets = Path(__file__).resolve().parent.parent / "assets"
-        script = (assets / "bridge.js").read_text()
-        style = (assets / "review.css").read_text()
+        script = (assets / "bridge.js").read_text(encoding="utf-8")
+        style = (assets / "review.css").read_text(encoding="utf-8")
         self.page = inject_bridge(report, {"token": self.token, "panels": ids, "run_id": manifest.get("run_id", self.run.name)}, script, style).encode()
         self.lock = threading.Lock()
         self.event_sink = event_sink
@@ -109,13 +111,13 @@ class ReviewRun:
 
     def review_state(self):
         path = self.run / "review-state.json"
-        state = json.loads(path.read_text()) if path.exists() else {"panels": {}}
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"panels": {}}
         if not isinstance(state, dict) or not isinstance(state.get("panels"), dict):
             raise Rejected("审阅状态文件无效；请保留文件并在当前会话检查")
         for panel in self.panels:
             state["panels"].setdefault(panel["id"], {"read": False, "comment": "", "revision": 0})
         submitted = self.run / "written-items.json"
-        state["submitted"] = json.loads(submitted.read_text()) if submitted.exists() else None
+        state["submitted"] = json.loads(submitted.read_text(encoding="utf-8")) if submitted.exists() else None
         return state
 
     def save_review(self, body):
@@ -162,7 +164,7 @@ class ReviewRun:
             if (self.run / dispatch.CONFIRMATION).exists():
                 raise Rejected("本轮已完成集中审阅。请新建下一轮，避免改变已确认的意见")
             attempts = self.run / "dispatch-state.json"
-            if attempts.exists() and json.loads(attempts.read_text()).get("batches"):
+            if attempts.exists() and json.loads(attempts.read_text(encoding="utf-8")).get("batches"):
                 raise Rejected("本轮已有分发记录。请新建下一轮审阅，避免覆盖已发送的意见")
             submission = {"reviewed": True, "input_method": "written", "submitted_at": now(), "items": rows}
             dispatch.write_json(self.run / "written-items.json", submission)
@@ -187,12 +189,14 @@ class ReviewRun:
         if not self.state_file.exists():
             return False
         try:
-            state = json.loads(self.state_file.read_text())
+            state = json.loads(self.state_file.read_text(encoding="utf-8"))
             if not isinstance(state, dict):
                 raise ValueError("invalid state")
             pid = state.get("pid")
             if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
                 raise ValueError("invalid pid")
+            if os.name == "nt":
+                return settings.windows_files.process_alive(pid)
             os.kill(pid, 0)
             return True
         except ProcessLookupError:
@@ -215,7 +219,7 @@ class ReviewRun:
             if not uv or not script.is_file():
                 raise Rejected("需要 uv 和完整的 Two Hours 随包录制组件", 503)
             session = self.run / "blurt"
-            if session.is_symlink() or (session.exists() and any(session.iterdir())):
+            if dispatch.is_link(session) or (session.exists() and any(session.iterdir())):
                 raise Rejected("本轮 blurt 目录已有内容，请新建运行，避免覆盖录制")
             session.mkdir(mode=0o700, exist_ok=True)
             log_created = False
@@ -252,11 +256,11 @@ class ReviewRun:
                 log.seek(max(0, self.log.stat().st_size - MAX_BODY))
                 output = log.read().decode("utf-8", errors="replace")
             marker = f"DONE video={video} duration="
-            if rc == 0 and marker in output and video.is_file() and not video.is_symlink():
+            if rc == 0 and marker in output and video.is_file() and not dispatch.is_link(video):
                 metadata = video.parent / "meta.json"
-                if metadata.is_symlink():
+                if dispatch.is_link(metadata):
                     raise ValueError("录制元数据不能是符号链接")
-                meta = json.loads(metadata.read_text()) if metadata.exists() else {}
+                meta = json.loads(metadata.read_text(encoding="utf-8")) if metadata.exists() else {}
                 if not isinstance(meta, dict):
                     raise ValueError("录制元数据无效")
                 with dispatch.locked(self.run):
@@ -282,7 +286,7 @@ class ReviewRun:
         if not path.exists():
             return None
         try:
-            plan = json.loads(path.read_text())
+            plan = json.loads(path.read_text(encoding="utf-8"))
             if plan.get("authorization_mode") == "automatic":
                 result = dispatch.status(self.run)
                 return {**plan, "dispatch_status": result, "approved_batch_ids": []}
@@ -300,7 +304,7 @@ class ReviewRun:
             plan["approved_batch_ids"] = []
             approval_path = self.run / "approval.json"
             if approval_path.exists():
-                approval = json.loads(approval_path.read_text())
+                approval = json.loads(approval_path.read_text(encoding="utf-8"))
                 if approval.get("plan_id") == plan["plan_id"]:
                     approved = approval["batch_ids"]
                     if not isinstance(approved, list) or not set(approved) <= set(ids):
@@ -427,7 +431,7 @@ class ReviewRun:
             approval = {"plan_id": plan["plan_id"], "batch_ids": chosen, "approved_at": now()}
             path = self.run / "approval.json"
             if path.exists():
-                previous = json.loads(path.read_text())
+                previous = json.loads(path.read_text(encoding="utf-8"))
                 if previous.get("plan_id") == approval["plan_id"]:
                     merged = set(plan["approved_batch_ids"]) | set(chosen)
                     if merged == set(plan["approved_batch_ids"]):
@@ -471,6 +475,25 @@ def make_server(run, port=0):
                 self.send_header(key, val)
             self.end_headers()
             self.wfile.write(data)
+            if self.command == "POST" and status >= 400:
+                # Rejections can leave request bytes unread. Closing a Windows
+                # socket immediately then sends RST and can discard the reply.
+                # Finish the response first, then discard a bounded amount of
+                # already-arriving data; never parse or act on rejected input.
+                self.wfile.flush()
+                self.close_connection = True
+                try:
+                    self.connection.shutdown(socket.SHUT_WR)
+                    deadline = time.monotonic() + 0.2
+                    remaining = MAX_BODY * 2
+                    while remaining > 0 and time.monotonic() < deadline:
+                        self.connection.settimeout(max(0.001, deadline - time.monotonic()))
+                        chunk = self.connection.recv(min(8192, remaining))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                except OSError:
+                    pass
 
         def check_origin(self, post=False):
             host = f"127.0.0.1:{self.server.server_port}"

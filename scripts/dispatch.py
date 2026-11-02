@@ -4,13 +4,24 @@
 import argparse
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
-import fcntl
+import os
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+import errno
 import hashlib
 import json
-import os
 from pathlib import Path
 import sys
 import tempfile
+import stat
+import importlib.util
+
+if os.name == "nt":
+    _windows_spec = importlib.util.spec_from_file_location("dispatch_windows", Path(__file__).with_name("windows_files.py"))
+    windows_files = importlib.util.module_from_spec(_windows_spec)
+    _windows_spec.loader.exec_module(windows_files)
 
 
 INPUTS = ("manifest.json", "report.html", "routes.json")
@@ -22,6 +33,15 @@ SETTINGS_HOME = Path.home() / ".2hours"
 
 class DispatchError(ValueError):
     pass
+
+
+def is_link(path):
+    """Treat Windows junctions and other reparse points like symbolic links."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
 
 
 def now():
@@ -47,6 +67,8 @@ def write_json(path, value):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
+        if os.name == "nt":
+            return  # Windows cannot open directories for fsync; the file was flushed above.
         directory = os.open(path.parent, os.O_RDONLY)
         try:
             os.fsync(directory)
@@ -78,7 +100,7 @@ def dispatch_preferences(value):
 
 def current_opt_in(home=None):
     path = (home or SETTINGS_HOME) / "settings.json"
-    if any(part.is_symlink() for part in (path, *path.parents)):
+    if any(is_link(part) for part in (path, *path.parents)):
         raise DispatchError("Settings path must not contain symlinks")
     value = read_json(path) if path.exists() else {}
     preferences = dispatch_preferences(value)
@@ -88,7 +110,7 @@ def current_opt_in(home=None):
 
 
 def media_signature(path):
-    if any(part.is_symlink() for part in (path, *path.parents)) or not path.is_file():
+    if any(is_link(part) for part in (path, *path.parents)) or not path.is_file():
         raise DispatchError("Input must be a regular file without symlinks")
     value = path.stat()
     return [value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns]
@@ -130,13 +152,62 @@ def bind_input(run, source, consent, targets, previous=None):
     write_json(path, data)
 
 
+LOCK_TIMEOUT_SECONDS = 60.0
+LOCK_POLL_SECONDS = 0.05
+
+
+def lock_timeout():
+    value = os.environ.get("TWOHOURS_LOCK_TIMEOUT")
+    if value is None:
+        return LOCK_TIMEOUT_SECONDS
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise DispatchError("TWOHOURS_LOCK_TIMEOUT must be a number of seconds") from None
+    if not seconds > 0:
+        raise DispatchError("TWOHOURS_LOCK_TIMEOUT must be positive")
+    return seconds
+
+
 @contextmanager
-def locked(run):
+def locked(run, timeout=None):
     if not run.is_dir():
         raise DispatchError("Run directory does not exist")
-    with (run / ".dispatch.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
+    path = run / ".dispatch.lock"
+    if os.name == "nt" and any(is_link(part) for part in (path, *path.parents)):
+        raise DispatchError("Run directory or lock must not contain links")
+    timeout = lock_timeout() if timeout is None else timeout
+    opened = windows_files.secure_lock_file(path) if os.name == "nt" else path.open("a+b")
+    with opened as lock:
+        import time
+        deadline = time.monotonic() + timeout
+        # Poll with a non-blocking lock so a stuck holder produces a clear
+        # error instead of blocking every waiter forever.
+        while True:
+            try:
+                if os.name == "nt":
+                    # Windows byte-range locks can extend beyond EOF. Leave empty files
+                    # empty, so competing openers never write before acquiring the lock.
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as error:
+                busy = (13, 36) if os.name == "nt" else (errno.EAGAIN, errno.EACCES)
+                if error.errno not in busy:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise DispatchError(
+                        f"Timed out after {timeout:g}s waiting for lock {path}; another 2hours process "
+                        "may be stuck holding it. Stop that process and retry.") from None
+                time.sleep(LOCK_POLL_SECONDS)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def text_field(value, label, optional=False):
@@ -183,7 +254,7 @@ def frame_path(run, value):
             or path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp")):
         return None
     candidate = run / "blurt" / path
-    if any(parent.is_symlink() for parent in (candidate, *candidate.parents) if parent != run.parent):
+    if any(is_link(parent) for parent in (candidate, *candidate.parents) if parent != run.parent):
         return None
     return candidate if candidate.is_file() and candidate.stat().st_size <= 16 * 1024 * 1024 else None
 

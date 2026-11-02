@@ -1,5 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
+# dependencies = ["sounddevice"]
 # ///
 """Environment check + ASR recommendation. Prints JSON; the agent explains it to the user.
 
@@ -14,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _common import IS_LINUX, IS_MAC, IS_WIN, MODELS_DIR, global_config, run, system_info  # noqa: E402
+from _common import IS_LINUX, IS_MAC, IS_WIN, MODELS_DIR, find_ffmpeg, fix_tcl_env, global_config, run, system_info  # noqa: E402
 from _identity import APP_NAME, TWO_HOURS, identity
 
 
@@ -45,7 +46,7 @@ def recommend(info: dict) -> list[dict]:
 
 def main():
     info = system_info()
-    ff = shutil.which("ffmpeg")
+    ff = find_ffmpeg()
     report = {
         "system": info,
         "recorder": identity(),
@@ -77,8 +78,24 @@ def main():
         else:
             report["todo"].append("Run `record.py test` once: macOS needs Screen Recording + Microphone permission for the "
                                   "app hosting this agent (Terminal/iTerm/VS Code/Claude/Codex), then a restart of that app")
-    if IS_WIN and ff and "ddagrab" not in run([ff, "-hide_banner", "-filters"], check=False).stdout:
-        report["todo"].append("ffmpeg lacks ddagrab (needs ffmpeg ≥ 6); gdigrab will be used (fine, a bit heavier)")
+    if IS_WIN:
+        fix_tcl_env()
+        try:
+            import tkinter
+            tkinter.Tcl().eval("info library")
+            report["tk_available"] = True
+        except Exception as error:
+            report["tk_available"] = False
+            report["todo"].append(f"Install Python with Tcl/Tk for the region picker: {error}")
+        try:
+            import sounddevice
+            sounddevice.query_hostapis()
+            report["portaudio_available"] = True
+        except Exception as error:
+            report["portaudio_available"] = False
+            report["todo"].append(f"Install microphone dependency: uv pip install sounddevice ({error})")
+        report["recording_engine"] = "tk" if report["tk_available"] else "ffmpeg"
+        report["capture_tested"] = False
     if IS_LINUX:
         import ctypes.util
         if not ctypes.util.find_library("portaudio"):

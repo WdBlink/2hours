@@ -13,6 +13,14 @@ SPEC.loader.exec_module(settings)
 
 
 class RetentionTests(unittest.TestCase):
+    def symlink(self, link, target, directory=False):
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest("Windows symlinks require Developer Mode or SeCreateSymbolicLinkPrivilege")
+            raise
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
@@ -136,8 +144,8 @@ class RetentionTests(unittest.TestCase):
         outside.mkdir()
         external = outside / "recording.mp4"
         external.write_bytes(b"external")
-        (self.home / "runs/linked-run").symlink_to(outside, target_is_directory=True)
-        (self.session / "audio.wav").symlink_to(external)
+        self.symlink(self.home / "runs/linked-run", outside, directory=True)
+        self.symlink(self.session / "audio.wav", external)
         os.link(external, self.session / "video.mkv")
         preview = self.policy("after_review")
         self.assertEqual(len([row for row in preview["files"] if row["eligible"]]), 1)
@@ -151,7 +159,7 @@ class RetentionTests(unittest.TestCase):
         preview = self.policy("after_review")
         moved = self.root / "moved"
         self.session.rename(moved)
-        self.session.symlink_to(moved, target_is_directory=True)
+        self.symlink(self.session, moved, directory=True)
         with self.assertRaisesRegex(ValueError, "已变化"):
             self.store.cleanup({"preview_id": preview["preview_id"]})
         self.assertTrue((moved / "recording.mp4").exists())
@@ -192,6 +200,7 @@ class RetentionTests(unittest.TestCase):
         self.assertIn("尚未完成审核", result["failed"][0]["error"])
         self.assertEqual(self.video.read_bytes(), b"recording")
 
+    @unittest.skipIf(os.name == "nt", "Unix rename race; Windows uses exclusive handle deletion tested separately")
     def test_replacement_between_stat_and_move_is_preserved_with_recovery_path(self):
         self.processed()
         preview = self.policy("after_review")
@@ -212,6 +221,7 @@ class RetentionTests(unittest.TestCase):
         self.assertIn(".retention-recovery-", str(recovered))
         self.assertFalse(self.video.exists())
 
+    @unittest.skipIf(os.name == "nt", "Unix rename race; Windows review recheck tested separately")
     def test_review_change_during_move_preserves_media(self):
         self.processed()
         preview = self.policy("after_review")
@@ -246,6 +256,7 @@ class RetentionTests(unittest.TestCase):
         self.assertIn("录制进行中", result["failed"][0]["error"])
         self.assertEqual(self.video.read_bytes(), b"recording")
 
+    @unittest.skipIf(os.name == "nt", "Unix rename race; Windows denies rename/replacement while deleting")
     def test_new_original_path_after_move_is_not_deleted(self):
         self.processed()
         preview = self.policy("after_review")
@@ -268,7 +279,7 @@ class RetentionTests(unittest.TestCase):
         state = self.home / "recorder/recording.json"
         state.parent.mkdir()
         state.write_text(json.dumps({"pid": 123, "session": str(self.session)}))
-        with patch.object(settings.os, "kill", return_value=None):
+        with patch.object(settings, "process_alive", return_value=True):
             self.assertFalse(self.store.preview()["files"][0]["eligible"])
         state.write_text("[]")
         self.assertFalse(self.store.preview()["files"][0]["eligible"])
@@ -278,7 +289,7 @@ class RetentionTests(unittest.TestCase):
                      {"retention": "keep", "revision": True}, {"retention": "keep", "revision": 0, "path": str(self.root)}):
             with self.assertRaises(ValueError):
                 self.store.save(body)
-        self.store.path.symlink_to(self.root / "outside-settings.json")
+        self.symlink(self.store.path, self.root / "outside-settings.json")
         with self.assertRaises(ValueError):
             self.store.save({"retention": "1_day", "revision": 0})
         self.assertFalse((self.root / "outside-settings.json").exists())
