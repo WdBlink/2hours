@@ -23,4 +23,4 @@ python3 SKILL/scripts/resource_guard.py --stage transcribe --output RUN/telemetr
 
 `samples.jsonl` 保存系统状态、阶段进程及当时最大的 25 个进程；`summary.json` 保留所有被观察进程的 RSS、physical footprint 采样峰值与内核 lifetime peak，PID 与启动身份一起用于区分进程。后台进程 lifetime peak 可能早于本次阶段；多进程合计可能重复计算共享内存。快于采样间隔的峰值或已退出的短命子进程可能漏采，不把采样结果称作绝对峰值。默认阈值是保守保护策略，不是经过证明的硬件安全界限，也不能防止一秒内发生的极端内存突增。
 
-守护器支持 macOS 和 Windows；其他系统会拒绝无保护执行。Windows 通过原生 Job Object 隔离目标及其后代，目标命令仅在加入 Job 后启动；超时、压力告警或守护进程退出时释放整组资源，不终止无关进程。Windows 使用真实 RAM、系统 commit charge、pagefile 和阶段进程内存；RAM 或 commit 达到 90% 视为压力告警。不可用的压缩内存和累计换出量记为 null，不模拟 macOS 计数器。依赖 psutil，可通过项目虚拟环境或 uv run 安装。录屏器与网页渲染进程不在此命令的自动终止范围中；可在审阅期间用不带命令的 observe 模式记录它们，出现告警后停止本轮进一步处理。
+守护器支持 macOS 和 Windows；其他系统会拒绝无保护执行。Windows 把目标放进原生 Job Object（kill-on-close，不允许 breakaway），目标命令仅在启动器加入 Job 后启动，由目标直接或经子进程创建的后代都留在 Job 中；经 WMI、计划任务、COM/Shell 激活或服务等 Job 之外的代理启动的进程不在 Job 内，守护器既不限制也不会终止它们。超时、压力告警或守护进程退出时释放整组资源，不终止无关进程。Windows 使用真实 RAM、系统 commit charge、pagefile 和阶段进程内存；RAM 或 commit 达到 90% 视为压力告警。不可用的压缩内存和累计换出量记为 null，不模拟 macOS 计数器。依赖 psutil，可通过项目虚拟环境或 uv run 安装。录屏器与网页渲染进程不在此命令的自动终止范围中；可在审阅期间用不带命令的 observe 模式记录它们，出现告警后停止本轮进一步处理。

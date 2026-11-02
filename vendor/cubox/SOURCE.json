@@ -32,7 +32,7 @@
     "run": "node cli/scripts/run.js <args>",
     "binary_path": "cli/bin/cubox-cli (Windows: cli/bin/cubox-cli.exe)",
     "requirements": "Node.js >=16 plus curl and tar (Windows: PowerShell); Go >=1.23 only for rebuilding from Go source",
-    "download": "official GitHub v1.0.10 release assets; installer does not verify a separate checksum",
+    "download": "official GitHub v1.0.10 release assets; local change: installer verifies each archive against a pinned SHA-256 (GitHub release asset digests, re-checked by download on 2026-11-02) and refuses unlisted versions or mismatches",
     "verification": "Official v1.0.10 installer and runner version check passed in an isolated macOS arm64 install; generated binary is not bundled."
   },
   "verification": {

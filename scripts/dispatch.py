@@ -9,6 +9,7 @@ if os.name == "nt":
     import msvcrt
 else:
     import fcntl
+import errno
 import hashlib
 import json
 from pathlib import Path
@@ -151,30 +152,56 @@ def bind_input(run, source, consent, targets, previous=None):
     write_json(path, data)
 
 
+LOCK_TIMEOUT_SECONDS = 60.0
+LOCK_POLL_SECONDS = 0.05
+
+
+def lock_timeout():
+    value = os.environ.get("TWOHOURS_LOCK_TIMEOUT")
+    if value is None:
+        return LOCK_TIMEOUT_SECONDS
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise DispatchError("TWOHOURS_LOCK_TIMEOUT must be a number of seconds") from None
+    if not seconds > 0:
+        raise DispatchError("TWOHOURS_LOCK_TIMEOUT must be positive")
+    return seconds
+
+
 @contextmanager
-def locked(run):
+def locked(run, timeout=None):
     if not run.is_dir():
         raise DispatchError("Run directory does not exist")
     path = run / ".dispatch.lock"
     if os.name == "nt" and any(is_link(part) for part in (path, *path.parents)):
         raise DispatchError("Run directory or lock must not contain links")
+    timeout = lock_timeout() if timeout is None else timeout
     opened = windows_files.secure_lock_file(path) if os.name == "nt" else path.open("a+b")
     with opened as lock:
-        if os.name == "nt":
-            import time
-            # Windows byte-range locks can extend beyond EOF. Leave empty files
-            # empty, so competing openers never write before acquiring the lock.
-            while True:
-                lock.seek(0)
-                try:
+        import time
+        deadline = time.monotonic() + timeout
+        # Poll with a non-blocking lock so a stuck holder produces a clear
+        # error instead of blocking every waiter forever.
+        while True:
+            try:
+                if os.name == "nt":
+                    # Windows byte-range locks can extend beyond EOF. Leave empty files
+                    # empty, so competing openers never write before acquiring the lock.
+                    lock.seek(0)
                     msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-                    break
-                except OSError as error:
-                    if error.errno not in (13, 36):
-                        raise
-                    time.sleep(0.05)
-        else:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+                else:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as error:
+                busy = (13, 36) if os.name == "nt" else (errno.EAGAIN, errno.EACCES)
+                if error.errno not in busy:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise DispatchError(
+                        f"Timed out after {timeout:g}s waiting for lock {path}; another 2hours process "
+                        "may be stuck holding it. Stop that process and retry.") from None
+                time.sleep(LOCK_POLL_SECONDS)
         try:
             yield
         finally:
