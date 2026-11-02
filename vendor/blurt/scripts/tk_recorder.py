@@ -30,6 +30,15 @@ FG = "#f4f4f5"
 MUTED = "#9a9aa1"
 
 
+def _plain(p) -> str:
+    r"""Path text without Windows' extended-length prefix: ffmpeg's concat demuxer reads the `?` in \\?\ as a URL
+    query and drops the list's directory. \\?\UNC\srv\share becomes \\srv\share (upstream 7dea4480 _plain)."""
+    s = str(p)
+    if s[:8].upper() == "\\\\?\\UNC\\":
+        return "\\\\" + s[8:]
+    return s[4:] if s.startswith("\\\\?\\") else s
+
+
 def zh(lang: str) -> bool:
     return lang.startswith("zh")
 
@@ -412,7 +421,9 @@ class TkRecorder:
                     "-framerate", str(self.fps), "-i", f"{screen}:none"]
             vf = f"crop={int(w * sf)}:{int(h * sf)}:{int(x * sf)}:{int(y * sf)},{scale}"
         from record import pick_encoder
-        return cmd + ["-vf", vf, *pick_encoder(ff), "-g", str(self.fps * 2), str(out)]
+        # 1 s Matroska clusters, flushed as they close, so a killed grabber leaves a playable segment (upstream f3f93b0f)
+        return cmd + ["-vf", vf, *pick_encoder(ff), "-g", str(self.fps * 2), "-cluster_time_limit", "1000",
+                      "-flush_packets", "1", str(out)]
 
     def start_segment(self):
         i = len(self.segments)
@@ -555,8 +566,8 @@ class TkRecorder:
         final = self.session / "recording.mp4"
         lst = self.session / "parts.txt"
         lst.write_text("".join(f"file '{p.name}'\n" for p in parts), encoding="utf-8")
-        joined = run([ffmpeg_bin(), "-nostdin", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst),
-                      "-c", "copy", "-movflags", "+faststart", str(final)], check=False)
+        joined = run([ffmpeg_bin(), "-nostdin", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", _plain(lst),
+                      "-c", "copy", "-movflags", "+faststart", _plain(final)], check=False)
         if joined.returncode or not final.is_file() or not final.stat().st_size:
             return {"event": "error", "code": "concat_failed", "message": joined.stderr[-1000:]}
         for p in [*parts, lst, *(s["video"] for s in self.segments), *(s["log"] for s in self.segments)]:

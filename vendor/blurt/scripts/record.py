@@ -234,7 +234,10 @@ def headless_video_cmd(out_path: Path, screen, fps: int, max_width: int) -> list
         else:
             cmd += ["-thread_queue_size", "1024", "-f", "gdigrab", "-framerate", str(fps), "-draw_mouse", "1",
                     "-i", "desktop"]
-    return cmd + ["-vf", scale, *pick_encoder(ff), "-g", str(fps * 2), str(out_path)]
+    # Matroska clusters of at most 1 s, flushed as they close: a grabber killed mid-take leaves a file that plays up
+    # to its last second (upstream f3f93b0f)
+    return cmd + ["-vf", scale, *pick_encoder(ff), "-g", str(fps * 2), "-cluster_time_limit", "1000",
+                  "-flush_packets", "1", str(out_path)]
 
 
 def mux(video: Path, audio: Path | None, offset: float, dest: Path) -> None:
