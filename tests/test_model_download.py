@@ -48,6 +48,7 @@ T = load_transcribe()
 
 DATA = random.Random(7).randbytes(3 << 20)          # 3 MB fake model
 SHA = hashlib.sha256(DATA).hexdigest()
+WRONG = bytes(b ^ 0xFF for b in DATA)               # right length, wrong content
 REL = 'fake/model.int8.onnx'
 MB = 1 << 20
 CHILD = """
@@ -108,10 +109,12 @@ class FakeResponse(io.BytesIO):
 
 
 class FakeServer:
-    """ranges=False ignores Range (200, whole file). bad_start reports a 206 whose Content-Range starts elsewhere."""
+    """ranges=False ignores Range (200, whole file). bad_start reports a 206 whose Content-Range starts elsewhere.
+    wrong=True answers a request from 0 with WRONG: a bad mirror that has the right length."""
 
-    def __init__(self, ranges=True, cut=None, no_length=False, bad_start=False):
+    def __init__(self, ranges=True, cut=None, no_length=False, bad_start=False, wrong=False):
         self.ranges, self.cut, self.no_length, self.bad_start = ranges, cut, no_length, bad_start
+        self.wrong = wrong
         self.requests: list[dict] = []
 
     def __call__(self, req, timeout=None):
@@ -123,7 +126,7 @@ class FakeServer:
         if start and self.bad_start:
             self.requests.append({'range': rng, 'status': 206, 'sent': len(DATA)})
             return FakeResponse(DATA, 206, start=0)
-        body = DATA[start:]
+        body = (WRONG if self.wrong and not start else DATA)[start:]
         sent = len(body) if self.cut is None else min(self.cut, len(body))
         self.requests.append({'range': rng, 'status': 206 if start else 200, 'sent': sent})
         return FakeResponse(body, 206 if start else 200, False if self.no_length else None, self.cut)
@@ -146,6 +149,10 @@ class DownloadCase(Isolated):
         self.dest = self.models / REL
         self.part = self.dest.with_suffix(self.dest.suffix + '.part')
         self.part.parent.mkdir(parents=True, exist_ok=True)
+
+    def one_source(self, sizes=None):
+        """Only source a, so a retry from 0 has to come from the same source."""
+        configure(self.models, [('http://127.0.0.1:9/a', SHA)], sizes)
 
     def download(self, server):
         with mock.patch.object(urllib.request, 'urlopen', side_effect=server), \
@@ -267,6 +274,54 @@ class SingleProcess(DownloadCase):
         with self.assertRaises(SystemExit):
             self.download(FakeServer())
         self.assertFalse(self.dest.exists())
+        self.assertFalse(self.part.exists())
+
+
+class WrongContent(DownloadCase):
+    """Bytes of the right length but the wrong content must never be installed, on any path that skips a download."""
+
+    # length unknown, .part is full length but wrong, the server answers 416: hash it, drop it, fetch from 0
+    def test_416_on_full_length_wrong_partial_hashes_and_restarts(self):
+        self.one_source()
+        self.part.write_bytes(WRONG)
+        s = FakeServer()
+        self.download(s)
+        self.assert_installed_ok()
+        self.assertEqual([(r['range'], r['status']) for r in s.requests], [(f'bytes={len(DATA)}-', 416), (None, 200)])
+        self.assertFalse(self.part.exists())
+
+    # length known, .part is full length but wrong: no Range request, hash it, drop it, fetch from 0
+    def test_known_size_full_length_wrong_partial_hashes_and_restarts(self):
+        self.one_source({SHA: len(DATA)})
+        self.part.write_bytes(WRONG)
+        s = FakeServer()
+        with mock.patch.object(T.hashlib, 'sha256', wraps=hashlib.sha256) as sha:
+            self.download(s)
+        self.assertGreaterEqual(sha.call_count, 2, 'both the old .part and the new download must be hashed')
+        self.assert_installed_ok()
+        self.assertEqual([r['range'] for r in s.requests], [None])
+        self.assertFalse(self.part.exists())
+
+    # length known, the only source sends full-length wrong bytes: fail, leave no final file and no .part
+    def test_known_size_only_source_with_wrong_content_fails_clean(self):
+        self.one_source({SHA: len(DATA)})
+        s = FakeServer(wrong=True)
+        with self.assertRaises(SystemExit):
+            self.download(s)
+        self.assertEqual([(r['range'], r['sent']) for r in s.requests], [(None, len(DATA))])
+        self.assertFalse(self.dest.exists())
+        self.assertFalse(self.part.exists())
+        self.assertFalse(T._marker(self.dest).exists())
+
+    # one source, corrupt .part: the resume fails the hash, the same source is asked again from 0 and installs
+    def test_single_source_bad_resume_retries_same_source_from_zero(self):
+        self.one_source()
+        self.part.write_bytes(b'\0' * MB)
+        s = FakeServer()
+        self.download(s)
+        self.assert_installed_ok()
+        self.assertEqual([r['range'] for r in s.requests], [f'bytes={MB}-', None])
+        self.assertEqual(sum(r['sent'] for r in s.requests), 2 * len(DATA) - MB)
         self.assertFalse(self.part.exists())
 
 
