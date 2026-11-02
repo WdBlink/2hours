@@ -111,8 +111,17 @@ class LockTests(unittest.TestCase):
         self.children.append(child)
         return child
 
-    def held(self, child):
-        self.assertEqual(child.stdout.readline().strip(), "held", child.stderr.read() if child.poll() is not None else "")
+    def held(self, child, limit=30):
+        # Bounded read: a holder stuck waiting for the lock (TIMEOUT_ENV is stripped, so 30 minutes)
+        # fails here instead of hanging the run.
+        line = []
+        reader = threading.Thread(target=lambda: line.append(child.stdout.readline()), daemon=True)
+        reader.start()
+        reader.join(limit)
+        if reader.is_alive():
+            child.kill()
+            self.fail(f"lock holder did not report 'held' within {limit}s")
+        self.assertEqual(line[0].strip(), "held", child.stderr.read() if child.poll() is not None else "")
 
     def guarded(self, timeout, limit=60):
         command = [sys.executable, str(self.fake), "run", str(LOCK_MODULE), str(self.marker)]
@@ -264,10 +273,22 @@ class Box:
         self.home = root / "home"
         self.data = self.home / ".2hours/recorder"
         self.log = root / "fake.jsonl"
-        for rel in ("silero_vad.onnx", "sensevoice/model.int8.onnx", "sensevoice/tokens.txt"):
+        # Pinned size + SHA-256 marker, so the files also pass the verified-download check from upstream
+        # b3b836ac (MODEL_SIZES); the fake backend never reads the bytes.
+        pinned = {
+            "silero_vad.onnx": ("9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6", 643854),
+            "sensevoice/model.int8.onnx": ("c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51", 239233841),
+            "sensevoice/tokens.txt": ("f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc", 315894),
+        }
+        for rel, (sha, size) in pinned.items():
             path = self.data / "models" / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"x")
+            with open(path, "wb") as f:
+                f.write(b"x")
+                f.truncate(size)
+            st = path.stat()
+            path.with_name(path.name + ".verified").write_text(
+                json.dumps({"size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": sha}))
         self.wav = root / "in.wav"
         subprocess.run([shutil.which("ffmpeg"), "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i",
                         "sine=frequency=440:duration=24", "-ar", "16000", "-ac", "1", str(self.wav)], check=True)

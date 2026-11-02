@@ -1,6 +1,6 @@
 """One 2hours transcription at a time on this machine.
 
-Follows AsrSlot from AGIHunt/blurt e72469dc (MIT, Copyright (c) AGIHunt): a lock file that the OS
+Follows AsrSlot from AGIHunt/blurt e72469dc (MIT, Copyright (c) 2026 blurt contributors): a lock file that the OS
 releases when its holder dies, a waiting run says it is queued on stderr, and a wait that runs out
 exits 3. Differences: 2hours keeps its own lock (~/.2hours/recorder/run/asr.lock, never Blurt's),
 allows one run (no max_concurrent), waits 30 minutes by default (TWOHOURS_ASR_LOCK_TIMEOUT), opens

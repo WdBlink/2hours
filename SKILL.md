@@ -72,7 +72,7 @@ python3 SKILL/scripts/review_bridge.py --run RUN
 
 按 Blurt §2–§4 调用现有 transcribe.py、frames.py，读取完整转录并查看必要视频帧。文件位于 RUN/blurt。加载本技能的 [决策 lens](references/decision-lens.md)，在原生 items.json 上增加来源与目标建议。
 
-处理前读取 [内存保护](references/resource-protection.md)。macOS 和 Windows 的转写、扫描与抽帧必须串行通过 `scripts/resource_guard.py` 执行，每阶段单独保存 telemetry；先做 baseline，再运行阶段。压力告警、swap 快速增长或采样失败时停止本阶段并暂停工作流，不自动重试、不继续下一阶段。原始材料和已有结果保持不变，诊断重跑使用独立输出目录。
+处理前读取 [内存保护](references/resource-protection.md)。macOS 和 Windows 的转写、扫描与抽帧必须串行通过 `scripts/resource_guard.py` 执行，每阶段单独保存 telemetry；先做 baseline，再运行阶段。压力告警、swap 快速增长或采样失败时停止本阶段并暂停工作流，不自动重试、不继续下一阶段。转写阶段退出码 3（`summary.json` 状态为 `lock_timeout`）表示另一个转写占着锁，排队超时，阶段没有启动；这不是内存压力暂停，告诉用户稍后重试。原始材料和已有结果保持不变，诊断重跑使用独立输出目录。
 
 以视频中可见的 panel ID 和圈画确定对象，manifest 提供实际来源。`focus.jsonl` 只辅助定位，不以墙钟减 meta.started_at 换算视频时间。暂停、重录、跳到外部网页或同时看见多张卡时，回到帧核对；不确定就保留问题。
 
