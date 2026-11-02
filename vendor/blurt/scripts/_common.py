@@ -7,6 +7,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -132,20 +134,113 @@ def load_json(path: Path, default=None):
         return default
 
 
+# Config safe-write below is ported from AGIHunt/blurt (MIT):
+# - 21e050d4: per-process temp file and bounded os.replace retry on PermissionError (save_json)
+# - 452d465a: an unreadable config reads as defaults, is backed up once (same bytes not twice, 0600) with one
+#   config_unreadable line per process (read_global_config), and update_global_config refuses to write over it
+# - 88db1f74: the ConfigUnreadable exception for that refusal, and save_config_if_readable
+# Added here: save_json removes its temp file when it gives up; the backup is created 0600 (no chmod afterwards).
+# Not ported: eb2bf801's .config.lock, 0600 config/temp files and its raw JSONDecodeError on an unreadable config;
+# 452d465a's trailing-comma tolerant parser; 88db1f74's NaN/Infinity refusal.
+REPLACE_ATTEMPTS = 20
+REPLACE_DELAY = 0.05
+
+
 def save_json(path: Path, data) -> None:
+    """Atomic: write a temp file of this process's own, then os.replace. On Windows the replace fails with
+    PermissionError while another process has the target open, so it is retried a bounded number of times; when it
+    still fails the temp file is removed and the error is raised."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        for attempt in range(REPLACE_ATTEMPTS):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(REPLACE_DELAY)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+class ConfigUnreadable(Exception):
+    """config.json can't be read, so a setting can't be saved; the file is left as it is."""
+
+    code = "config_unreadable"
+
+    def __init__(self, path: Path):
+        super().__init__(f"{path} can't be read; nothing was saved. Fix or remove it.")
+        self.path = path
+
+
+_CONFIG_WARNED: set = set()
+
+
+def _backup_unreadable(path: Path) -> Path | None:
+    """Copy an unreadable config to config.json.bad-<time>, unless a backup with the same bytes already exists."""
+    try:
+        data = path.read_bytes()
+        for old in sorted(path.parent.glob(path.name + ".bad-*")):
+            if old.read_bytes() == data:
+                return old
+        stem = f"{path.name}.bad-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        for name in (stem, f"{stem}-{os.getpid()}", f"{stem}-{os.getpid()}-{uuid.uuid4().hex[:8]}"):
+            bak = path.with_name(name)
+            try:
+                # 0600 from creation: the config may hold secrets (feishu app_secret). O_EXCL never reuses a file.
+                fd = os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+            except FileExistsError:
+                continue
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(data)
+            except BaseException:
+                bak.unlink(missing_ok=True)
+                raise
+            return bak
+        return None
+    except OSError:
+        return None
+
+
+def read_global_config() -> tuple[dict, bool]:
+    """(settings, readable). A missing file is readable ({}). One that doesn't parse, is empty, or isn't a JSON
+    object gives ({}, False): it is backed up once and one `config_unreadable` line goes to stderr, once per
+    process, so recording carries on with the defaults."""
+    path = Path(GLOBAL_CONFIG)
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {}, True
+    except (OSError, ValueError):  # ValueError covers JSONDecodeError and UnicodeDecodeError
+        cfg = None
+    if isinstance(cfg, dict):
+        return cfg, True
+    if str(path) not in _CONFIG_WARNED:
+        _CONFIG_WARNED.add(str(path))
+        bak = _backup_unreadable(path)
+        print(json.dumps({"event": "config_unreadable", "path": str(path), "backup": str(bak) if bak else None}),
+              file=sys.stderr)
+    return {}, False
 
 
 def global_config() -> dict:
-    return load_json(GLOBAL_CONFIG, {}) or {}
+    return read_global_config()[0]
 
 
 def update_global_config(patch: dict) -> dict:
-    cfg = global_config()
+    """Read-modify-write. An unreadable config.json is never overwritten: ConfigUnreadable is raised instead."""
+    cfg, ok = read_global_config()
+    if not ok:
+        raise ConfigUnreadable(GLOBAL_CONFIG)
     for k, v in patch.items():
         if isinstance(v, dict) and isinstance(cfg.get(k), dict):
             cfg[k].update(v)
@@ -153,6 +248,16 @@ def update_global_config(patch: dict) -> dict:
             cfg[k] = v
     save_json(GLOBAL_CONFIG, cfg)
     return cfg
+
+
+def save_config_if_readable(patch: dict) -> bool:
+    """update_global_config for convenience values (skill_dir, last_region): an unreadable config only skips the
+    write. False: not saved."""
+    try:
+        update_global_config(patch)
+        return True
+    except ConfigUnreadable:
+        return False
 
 
 def new_session_dir(root: Path | None = None) -> Path:

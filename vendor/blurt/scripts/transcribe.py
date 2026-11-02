@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _common import (MODELS_DIR, die, ffmpeg_bin, fmt_ts, global_config, save_json, update_global_config,  # noqa: E402
+from _common import (MODELS_DIR, ConfigUnreadable, die, ffmpeg_bin, fmt_ts, global_config, save_json, update_global_config,  # noqa: E402
                      use_system_certs)
 
 use_system_certs()
@@ -394,7 +394,10 @@ def cmd_setup(a):
         patch["model"] = a.model
     if a.language:
         patch["language"] = a.language
-    update_global_config({"asr": patch})
+    try:
+        update_global_config({"asr": patch})
+    except ConfigUnreadable as e:
+        die(str(e))
     print(json.dumps({"ok": True, "asr": global_config()["asr"]}, ensure_ascii=False))
 
 

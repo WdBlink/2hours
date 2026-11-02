@@ -47,7 +47,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (BLURT_HOME, IS_LINUX, IS_MAC, IS_WIN, STATE_FILE, CommandLog, append_command, die, ffmpeg_bin, fix_tcl_env, fmt_ts,  # noqa: E402
-                     global_config, has_link_component, load_json, new_session_dir, probe_duration, run, save_json, update_global_config)
+                     global_config, has_link_component, load_json, new_session_dir, probe_duration, run, save_config_if_readable, save_json)
 
 from _identity import (APP_BUNDLE, APP_NAME, BUNDLE_ID, EXECUTABLE, ICON, INSTALLED_APP,
                        PROJECT_FOLDER, TWO_HOURS, identity)
@@ -332,7 +332,7 @@ def native_binary(build: bool = True) -> Path | None:
 def remember_skill_dir() -> None:
     skill = str(Path(__file__).resolve().parent.parent)
     if global_config().get("skill_dir") != skill:
-        update_global_config({"skill_dir": skill})
+        save_config_if_readable({"skill_dir": skill})
 
 
 def ensure_app_installed(force: bool = False) -> Path | None:
@@ -551,7 +551,7 @@ def finish_session(session, result, meta):
     if warning:
         result["warning"] = warning.strip()
     if result.get("region"):
-        update_global_config({"record": {"last_region": result["region"]}})
+        save_config_if_readable({"record": {"last_region": result["region"]}})
     dur = probe_duration(final)
     events = session / "events.jsonl"
     n_markers = sum(1 for l in events.open(encoding="utf-8") if '"marker"' in l) if events.exists() else 0
@@ -569,7 +569,7 @@ def recover_session(session):
         raise ValueError("recovery requires a real session directory")
     session = session.resolve()
     video, backup = session / "recording.mp4", session / "recording.original.mp4"
-    for name in ("recording.mp4", "meta.json", "meta.json.tmp", "events.jsonl", "native-events.jsonl", ".cmd"):
+    for name in ("recording.mp4", "meta.json", "events.jsonl", "native-events.jsonl", ".cmd"):
         path = session / name
         if has_link_component(path) or (path.exists() and not path.is_file()):
             raise ValueError(f"recovery refuses a non-regular file: {path}")
