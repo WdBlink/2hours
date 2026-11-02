@@ -313,6 +313,21 @@ LOCAL = {"sensevoice", "mlx-whisper", "faster-whisper"}
 
 
 # ------------------------------------------------------------------ commands
+def asr_lock():
+    """2hours vendors this file: hold its machine-wide ASR lock (scripts/asr_lock.py, after upstream Blurt
+    e72469dc's AsrSlot, MIT) around model load and decoding. Standalone Blurt runs without it."""
+    from _identity import TWO_HOURS, TWO_HOURS_ROOT
+    if TWO_HOURS:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("twohours_asr_lock", TWO_HOURS_ROOT / "scripts/asr_lock.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    return SimpleNamespace(slot=nullcontext, LockError=type("LockError", (Exception,), {"exit_code": 1}))
+
+
 def cmd_run(a):
     src = Path(a.input)
     if not src.exists():
@@ -325,37 +340,42 @@ def cmd_run(a):
     if name not in BACKENDS:
         die(f"unknown backend {name}; choose from {list(BACKENDS)}")
 
-    t0 = time.time()
-    backend = BACKENDS[name](a)
-    workers = 1 if name in LOCAL else a.concurrency
-    # Blurt's native recorder writes the mic as track 0 and, with --system-audio, what the Mac played as track 1.
-    # Transcribing them apart labels who spoke: the user ("mic") or the call / demo ("system").
-    n_tracks = max(1, audio_tracks(src))
-    duration = speech = blank = 0.0
-    results = []
-    for track in range(min(n_tracks, 2)):
-        samples = load_audio(src, track)
-        duration = max(duration, len(samples) / SR)
-        segs = vad_segments(samples, max_speech=min(25, backend.max_chunk))
-        chunks = group_chunks(segs, backend.max_chunk)
-        label = ("mic", "system")[track] if n_tracks > 1 else None
-        sp = sum(e - s for s, e in chunks)
-        print(f"audio {fmt_ts(len(samples) / SR)}{f' ({label})' if label else ''}, speech {fmt_ts(sp)} "
-              f"in {len(chunks)} chunks → {name}", file=sys.stderr, flush=True)
+    lock = asr_lock()
+    try:
+        with lock.slot():  # 2hours: one transcription at a time on this machine
+            t0 = time.time()
+            backend = BACKENDS[name](a)
+            workers = 1 if name in LOCAL else a.concurrency
+            # Blurt's native recorder writes the mic as track 0 and, with --system-audio, what the Mac played as track 1.
+            # Transcribing them apart labels who spoke: the user ("mic") or the call / demo ("system").
+            n_tracks = max(1, audio_tracks(src))
+            duration = speech = blank = 0.0
+            results = []
+            for track in range(min(n_tracks, 2)):
+                samples = load_audio(src, track)
+                duration = max(duration, len(samples) / SR)
+                segs = vad_segments(samples, max_speech=min(25, backend.max_chunk))
+                chunks = group_chunks(segs, backend.max_chunk)
+                label = ("mic", "system")[track] if n_tracks > 1 else None
+                sp = sum(e - s for s, e in chunks)
+                print(f"audio {fmt_ts(len(samples) / SR)}{f' ({label})' if label else ''}, speech {fmt_ts(sp)} "
+                      f"in {len(chunks)} chunks → {name}", file=sys.stderr, flush=True)
 
-        def work(ch, samples=samples):
-            s, e = ch
-            return [(s + rs, s + min(re_, e - s), t) for rs, re_, t in backend.transcribe(samples[int(s * SR):int(e * SR)])]
+                def work(ch, samples=samples):
+                    s, e = ch
+                    return [(s + rs, s + min(re_, e - s), t) for rs, re_, t in backend.transcribe(samples[int(s * SR):int(e * SR)])]
 
-        with ThreadPoolExecutor(workers) as pool:
-            for i, ((s, e), r) in enumerate(zip(chunks, pool.map(work, chunks))):
-                results.extend((s_, e_, t, label) for s_, e_, t in r)
-                if track == 0 and not any(ch.isalnum() for *_, t in r for ch in t):
-                    blank += e - s
-                if (i + 1) % 20 == 0:
-                    print(f"  {i + 1}/{len(chunks)} chunks", file=sys.stderr, flush=True)
-        if track == 0:
-            speech = sp
+                with ThreadPoolExecutor(workers) as pool:
+                    for i, ((s, e), r) in enumerate(zip(chunks, pool.map(work, chunks))):
+                        results.extend((s_, e_, t, label) for s_, e_, t in r)
+                        if track == 0 and not any(ch.isalnum() for *_, t in r for ch in t):
+                            blank += e - s
+                        if (i + 1) % 20 == 0:
+                            print(f"  {i + 1}/{len(chunks)} chunks", file=sys.stderr, flush=True)
+                if track == 0:
+                    speech = sp
+    except lock.LockError as error:
+        die(str(error), error.exit_code)
 
     results.sort(key=lambda r: r[0])
     segments = [{"start": round(s, 2), "end": round(e, 2), "text": t, **({"speaker": lb} if lb else {})}

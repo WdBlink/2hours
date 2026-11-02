@@ -19,6 +19,8 @@ python3 SKILL/scripts/resource_guard.py --stage transcribe --output RUN/telemetr
 
 停止先发 SIGTERM，2 秒未退出再发 SIGKILL。这样可以释放阶段内存，不能用 SIGSTOP 把占用留在内存里冒充压力解除。守护器不终止 Ollama、其他项目或用户应用。因外部负载暂停时指出对应进程，由用户决定如何处理。采样失败也停止阶段，不降级为无保护运行。
 
+同一台机器同时只跑一个转写。transcribe.py 在加载模型前取得 `~/.2hours/recorder/run/asr.lock`（不与独立 Blurt 共用）；守护器在 300 秒计时开始前代为排队并把锁交给子进程，排队时间不计入 300 秒，`summary.json` 记录 `asr_lock_wait_seconds`。排队时 stderr 打印 `asr: queued`；默认最多等 30 分钟，可用 `TWOHOURS_ASR_LOCK_TIMEOUT`（秒，正数）调整。等不到锁时退出码 3，状态为 `lock_timeout`，阶段命令没有启动，也没有 `command.log`；告诉用户稍后重试，不当作内存压力暂停。
+
 这是工作流暂停，未完成的阶段需在压力恢复后显式重跑；不会自动循环重试或继续后续阶段。中断时已有完整阶段可复用，半成品不算成功。完成状态仍需校验转录长度、扫描帧数与图片等实际输出。
 
 `samples.jsonl` 保存系统状态、阶段进程及当时最大的 25 个进程；`summary.json` 保留所有被观察进程的 RSS、physical footprint 采样峰值与内核 lifetime peak，PID 与启动身份一起用于区分进程。后台进程 lifetime peak 可能早于本次阶段；多进程合计可能重复计算共享内存。快于采样间隔的峰值或已退出的短命子进程可能漏采，不把采样结果称作绝对峰值。默认阈值是保守保护策略，不是经过证明的硬件安全界限，也不能防止一秒内发生的极端内存突增。
