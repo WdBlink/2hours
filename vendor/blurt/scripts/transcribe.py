@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -33,7 +35,14 @@ import urllib.request
 import uuid
 import wave
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import quote
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 import numpy as np
 
@@ -69,41 +78,230 @@ MODEL_FILES = {
         (f"https://hf-mirror.com/{SENSEVOICE_REPO}/resolve/main/tokens.txt", SENSEVOICE_TOKENS_SHA256),
     ],
 }
+# Exact byte sizes, keyed by the pinned SHA-256 (checked 2026-11-02: Hugging Face paths-info "size", GitHub release
+# asset "size", and Content-Length / Content-Range of each source). A known size tells an unfinished .part (keep it,
+# resume later) from a finished but wrong one (delete it). Sources without an entry fall back to the response headers.
+MODEL_SIZES = {
+    SILERO_GITHUB_SHA256: 643854,
+    SILERO_HF_SHA256: 1807522,
+    SENSEVOICE_MODEL_SHA256: 239233841,
+    SENSEVOICE_TOKENS_SHA256: 315894,
+}
+# How long a second process waits for another one to finish the same model (240 MB at ~70 KB/s fits).
+DOWNLOAD_LOCK_TIMEOUT = 3600.0
+DOWNLOAD_LOCK_POLL = 0.1
 
 
 # ------------------------------------------------------------------ downloads
+# Resumable, locked downloads adapted from AGIHunt/blurt b3b836ac (MIT): Range resume into .part, 416 as "already
+# complete", 200 as "start over", and one lock per model. Unlike upstream, the SHA-256 check stays: the whole file is
+# hashed from disk before it is installed, and the lock is taken inside download() itself.
+class _Incomplete(Exception):
+    """The .part is still a prefix worth keeping (fewer bytes than the known total arrived, or the request failed
+    before anything was written)."""
+
+
+class _BadResume(ValueError):
+    """The checked file included bytes from an earlier run and was wrong: worth one fresh try from byte 0."""
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _marker(dest: Path) -> Path:
+    return dest.with_name(dest.name + ".verified")
+
+
+def _record_verified(dest: Path, sha256: str, st: os.stat_result | None = None) -> None:
+    """Cache a successful check as size + mtime + hash, so later runs need only a stat. Best effort."""
+    st = st or dest.stat()
+    marker = _marker(dest)
+    tmp = marker.with_name(f"{marker.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps({"size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": sha256}))
+        os.replace(tmp, marker)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+
+
+def _is_verified(dest: Path, accepted: dict[str, int | None], full: bool) -> bool:
+    """`dest` matches one of the pinned hashes. Trusts the marker only if size and mtime still match it;
+    otherwise, when `full`, hashes the file once and writes a new marker."""
+    try:
+        st = dest.stat()
+    except OSError:
+        return False
+    if not any(size in (None, st.st_size) for size in accepted.values()):
+        return False
+    try:
+        mark = json.loads(_marker(dest).read_text())
+        if isinstance(mark, dict) and mark.get("size") == st.st_size and mark.get("mtime_ns") == st.st_mtime_ns \
+                and accepted.get(mark.get("sha256"), -1) in (None, st.st_size):
+            return True
+    except (OSError, ValueError, TypeError):
+        pass
+    if not full:
+        return False
+    digest = _sha256_file(dest)
+    if accepted.get(digest, -1) not in (None, st.st_size):
+        return False
+    _record_verified(dest, digest, st)
+    return True
+
+
+def _download_lock_path(rel: str) -> Path:
+    return MODELS_DIR / ".locks" / (quote(rel, safe="") + ".lock")
+
+
+@contextmanager
+def _download_lock(rel: str):
+    """One download of `rel` at a time across processes. Same polling lock as scripts/dispatch.py: flock on
+    POSIX, a 1-byte msvcrt lock on Windows. Both go away with the process, so a killed holder never blocks."""
+    path = _download_lock_path(rel)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+b") as lock:
+        deadline = time.monotonic() + DOWNLOAD_LOCK_TIMEOUT
+        waiting = False
+        while True:
+            try:
+                if os.name == "nt":
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as error:
+                busy = (13, 36) if os.name == "nt" else (errno.EAGAIN, errno.EACCES)
+                if error.errno not in busy:
+                    raise
+                if time.monotonic() >= deadline:
+                    die(f"Timed out after {DOWNLOAD_LOCK_TIMEOUT:g}s waiting for {path}: another process is still "
+                        f"downloading {rel}. Let it finish, or stop it and retry.")
+                if not waiting:
+                    print(f"waiting for another process downloading {rel}", file=sys.stderr, flush=True)
+                    waiting = True
+                time.sleep(DOWNLOAD_LOCK_POLL)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _fetch_verified(url: str, tmp: Path, expected: str, size: int | None) -> None:
+    """Bring `tmp` to the complete file from `url`, resuming what is there, then hash the whole file.
+    Returns only if it matches `expected`. Raises _Incomplete (keep tmp) when tmp may still be a good prefix;
+    any other exception means tmp is not usable."""
+    have = tmp.stat().st_size if tmp.exists() else 0
+    if size is not None and have > size:
+        tmp.unlink()
+        have = 0
+    kept = have  # bytes from an earlier run that the final hash will cover
+    if not (have and have == size):
+        headers = {"User-Agent": "blurt"}
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30)
+        except urllib.error.HTTPError as e:
+            if e.code != 416 or not have:
+                if have:
+                    raise _Incomplete(e) from e
+                raise
+            r = None  # nothing past what we have: check the whole file below
+        except Exception as e:  # nothing was written; a .part from an earlier run is still as good as before
+            if have:
+                raise _Incomplete(e) from e
+            raise
+        if r is not None:
+            with r:
+                start, total = 0, None
+                status = getattr(r, "status", None) or 200
+                if have and status == 206:
+                    m = re.fullmatch(r"bytes (\d+)-\d+/(\d+|\*)", (r.headers.get("content-range") or "").strip())
+                    if not m or int(m[1]) != have:
+                        raise _BadResume(f"server resumed at the wrong offset ({r.headers.get('content-range')!r}, "
+                                         f"have {have} bytes)")
+                    start = have
+                    total = int(m[2]) if m[2] != "*" else None
+                elif status == 200 and r.headers.get("content-length"):
+                    total = int(r.headers["content-length"])
+                if size is not None and total is not None and total != size:
+                    raise ValueError(f"server reports {total} bytes, expected {size}")
+                total = size if size is not None else total
+                kept = start  # 0 when the server ignored Range and sent the whole file
+                done, t0 = start, time.time()
+                with open(tmp, "ab" if start else "wb") as f:
+                    try:
+                        while chunk := r.read(1 << 20):
+                            f.write(chunk)
+                            done += len(chunk)
+                            if total and time.time() - t0 > 2:
+                                print(f"  {done >> 20}/{total >> 20} MB", file=sys.stderr, flush=True)
+                                t0 = time.time()
+                    except Exception as e:
+                        if total is not None:
+                            raise _Incomplete(f"connection lost at {done}/{total} bytes: {e}") from e
+                        raise
+            have = tmp.stat().st_size
+            if total is not None and have < total:
+                raise _Incomplete(f"incomplete: {have}/{total} bytes")
+            if total is not None and have > total:
+                raise (_BadResume if kept else ValueError)(f"got {have} bytes, expected {total}")
+    digest = _sha256_file(tmp)  # the whole file on disk, including bytes from an earlier run
+    if digest != expected:
+        raise (_BadResume if kept else ValueError)(f"SHA-256 mismatch for {url}: expected {expected}, got {digest}")
+
+
 def download(rel: str) -> Path:
     dest = MODELS_DIR / rel
-    if dest.exists() and dest.stat().st_size > 0:
+    sources = MODEL_FILES[rel]
+    accepted = {expected: MODEL_SIZES.get(expected) for _, expected in sources}
+    if _is_verified(dest, accepted, full=False):  # fast path: stat + marker, no lock, no hashing
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
-    sources = MODEL_FILES[rel]
     if os.environ.get("BLURT_HF_MIRROR"):  # force the China-friendly mirror first
         sources = sorted(sources, key=lambda source: "hf-mirror" not in source[0])
-    last = None
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    for url, expected in sources:
-        try:
-            print(f"downloading {rel} <- {url}", file=sys.stderr, flush=True)
-            digest = hashlib.sha256()
-            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "blurt"}), timeout=30) as r, \
-                    open(tmp, "wb") as f:
-                total, done, t0 = int(r.headers.get("content-length") or 0), 0, time.time()
-                while chunk := r.read(1 << 20):
-                    f.write(chunk)
-                    digest.update(chunk)
-                    done += len(chunk)
-                    if total and time.time() - t0 > 2:
-                        print(f"  {done >> 20}/{total >> 20} MB", file=sys.stderr, flush=True)
-                        t0 = time.time()
-            if digest.hexdigest() != expected:
-                raise ValueError(f"SHA-256 mismatch for {url}: expected {expected}, got {digest.hexdigest()}")
-            os.replace(tmp, dest)
-            return dest
-        except Exception as e:  # try next mirror
-            last = e
-            print(f"  failed: {e}", file=sys.stderr)
-            tmp.unlink(missing_ok=True)
+    with _download_lock(rel):
+        # Another process may have installed it while we waited, or an older run left an unchecked file.
+        if dest.exists():
+            if _is_verified(dest, accepted, full=True):
+                return dest
+            bad = dest.with_name(dest.name + ".bad")
+            try:
+                os.replace(dest, bad)
+            except OSError as e:
+                die(f"{dest} does not match a pinned SHA-256 and could not be moved aside: {e}")
+            print(f"  {dest} does not match a pinned SHA-256; moved to {bad.name}", file=sys.stderr, flush=True)
+        _marker(dest).unlink(missing_ok=True)
+        last = None
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        for url, expected in sources:
+            for _ in range(2):  # a second pass only after a resumed file failed: retry this source from 0
+                have = tmp.stat().st_size if tmp.exists() else 0
+                try:
+                    note = f" (resuming at {have} bytes)" if have else ""
+                    print(f"downloading {rel} <- {url}{note}", file=sys.stderr, flush=True)
+                    _fetch_verified(url, tmp, expected, MODEL_SIZES.get(expected))
+                    os.replace(tmp, dest)
+                    _record_verified(dest, expected)
+                    return dest
+                except _Incomplete as e:  # keep the .part for the next source or the next run
+                    last = e
+                    print(f"  failed: {e} (kept {tmp.name} to resume)", file=sys.stderr)
+                    break
+                except Exception as e:  # try next mirror
+                    last = e
+                    print(f"  failed: {e}", file=sys.stderr)
+                    tmp.unlink(missing_ok=True)
+                    if not isinstance(e, _BadResume):
+                        break
     die(f"Could not download a verified {rel}: {last}. Set BLURT_HF_MIRROR=1 or download manually to {dest}")
 
 
