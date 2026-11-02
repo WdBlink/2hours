@@ -1,9 +1,11 @@
 r"""Windows recorder fixes ported from upstream blurt 7dea4480/f3f93b0f: Matroska clusters flushed every second, and
 segment concat without the \\?\ extended-length prefix (which ffmpeg's concat demuxer mishandles)."""
+import contextlib
 import importlib.util
+import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import sys
 import tempfile
@@ -45,47 +47,105 @@ class PlainPathTests(unittest.TestCase):
             self.assertEqual(tk_recorder._plain(path), path)
 
 
+class MemoryWindowsPath(PureWindowsPath):
+    r"""A Windows path whose files live in a dict, so the \\?\ and UNC sessions below never touch a real disk.
+    Keys ignore case and the \\?\ / \\?\UNC\ prefix, as the Windows file APIs do."""
+    files = None
+
+    @staticmethod
+    def key(text):
+        text = str(text)
+        if text[:8].upper() == '\\\\?\\UNC\\':
+            text = '\\\\' + text[8:]
+        elif text.startswith(EXT):
+            text = text[4:]
+        return text.lower()
+
+    def exists(self):
+        return self.key(self) in self.files
+
+    def is_file(self):
+        return self.exists()
+
+    def stat(self):
+        return SimpleNamespace(st_size=len(self.files[self.key(self)]))
+
+    def write_bytes(self, data):
+        self.files[self.key(self)] = bytes(data)
+
+    def write_text(self, text, encoding=None):
+        self.write_bytes(text.encode(encoding or 'utf-8'))
+
+    def read_text(self, encoding=None):
+        return self.files[self.key(self)].decode(encoding or 'utf-8')
+
+    def unlink(self, missing_ok=False):
+        if self.files.pop(self.key(self), None) is None and not missing_ok:
+            raise FileNotFoundError(str(self))
+
+
 class TkConcatPathTests(unittest.TestCase):
-    r"""On Linux a directory literally named \\?\C:\s stands in for the prefixed session; only ffmpeg's arguments are
-    checked here. The real concat on Windows is in WindowsExtendedPathMediaTests."""
+    r"""finalize() on a \\?\ session, with Windows path rules on every OS and every file kept in memory: nothing
+    is created on disk (CI cannot reach \\srv\share, and \\?\C:\s would be a real C:\s). The real concat on
+    Windows is in WindowsExtendedPathMediaTests."""
 
     def finalize_in(self, name):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         cwd = os.getcwd()
-        os.chdir(directory.name)
+        os.chdir(directory.name)  # anything that slipped past the fakes would land here and fail the last check
         self.addCleanup(os.chdir, cwd)
-        session = Path(name)
-        session.mkdir()
+        files = {}
+        session = type('Session', (MemoryWindowsPath,), {'files': files})(name)
         video, log = session / 'seg00.mkv', session / 'seg00.log'
         video.write_bytes(b'v')
-        log.write_text('', encoding='utf-8')
+        log.write_text('')
         rec = recorder(session)
         rec.segments = [{'video': video, 'log': log, 'wall_start': 0, 'audio_from': 0, 'audio_to': 0}]
-        calls = []
+        calls, lists = [], []
 
         def fake_run(cmd, check=False):
             calls.append(cmd)
-            (session / Path(cmd[-1].replace('\\', '/')).name).write_bytes(b'x')
+            if 'concat' in cmd:  # read the list the way ffmpeg would: from the path it was given
+                listed = type(session)(cmd[cmd.index('-i') + 1])
+                if not listed.exists():
+                    return SimpleNamespace(returncode=1, stderr=f'{listed}: No such file or directory', stdout='')
+                lists.append(listed.read_text())
+            type(session)(cmd[-1]).write_bytes(b'x')
             return SimpleNamespace(returncode=0, stderr='', stdout='')
-        with patch.object(tk_recorder, 'ffmpeg_bin', return_value='ffmpeg'), patch.object(tk_recorder, 'run', fake_run):
+
+        @contextlib.contextmanager
+        def fake_open(path, mode='r', encoding=None):
+            self.assertEqual(mode, 'w')
+            buffer = io.StringIO()
+            yield buffer
+            type(session)(path).write_text(buffer.getvalue())
+
+        real_path = Path
+        with patch.object(tk_recorder, 'ffmpeg_bin', return_value='ffmpeg'), patch.object(tk_recorder, 'run', fake_run), \
+                patch.object(tk_recorder, 'open', fake_open, create=True), \
+                patch.object(tk_recorder, 'Path', lambda p: p if isinstance(p, PureWindowsPath) else real_path(p)), \
+                patch.dict(sys.modules, {'record': SimpleNamespace(first_frame_wall=lambda _: None)}):
             result = rec.finalize()
         concat = [c for c in calls if 'concat' in c]
         self.assertEqual(len(concat), 1, calls)
+        self.assertEqual(lists, ["file 'part00.mp4'\n"])
+        self.assertEqual(os.listdir(directory.name), [])
+        self.assertEqual(sorted(files), [MemoryWindowsPath.key(session / n) for n in ('events.jsonl', 'recording.mp4')])
         return result, concat[0], session
 
     def test_concat_list_and_output_drop_extended_prefix(self):
         result, cmd, session = self.finalize_in(EXT + 'C:\\s')
         self.assertEqual(result['event'], 'stopped', result)
-        self.assertEqual(cmd[cmd.index('-i') + 1], 'C:\\s' + os.sep + 'parts.txt')
-        self.assertEqual(cmd[-1], 'C:\\s' + os.sep + 'recording.mp4')
-        self.assertEqual(result['file'], str(session / 'recording.mp4'))
+        self.assertEqual(cmd[cmd.index('-i') + 1], 'C:\\s\\parts.txt')
+        self.assertEqual(cmd[-1], 'C:\\s\\recording.mp4')
+        self.assertEqual(result['file'], EXT + 'C:\\s\\recording.mp4')
 
     def test_concat_list_and_output_use_plain_unc(self):
         result, cmd, _ = self.finalize_in(EXT + 'UNC\\srv\\share\\s')
         self.assertEqual(result['event'], 'stopped', result)
-        self.assertEqual(cmd[cmd.index('-i') + 1], '\\\\srv\\share\\s' + os.sep + 'parts.txt')
-        self.assertEqual(cmd[-1], '\\\\srv\\share\\s' + os.sep + 'recording.mp4')
+        self.assertEqual(cmd[cmd.index('-i') + 1], '\\\\srv\\share\\s\\parts.txt')
+        self.assertEqual(cmd[-1], '\\\\srv\\share\\s\\recording.mp4')
 
 
 class MatroskaClusterTests(unittest.TestCase):
