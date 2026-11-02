@@ -43,6 +43,7 @@ class FakeUser32:
     def __init__(self, taken=(), last_error=ERROR_HOTKEY_ALREADY_REGISTERED, deliver=()):
         self.taken, self.last_error, self.deliver = set(taken), last_error, list(deliver)
         self.calls, self.quit, self.in_loop = [], threading.Event(), threading.Event()
+        self.bad_windll = []   # WinDLL 调用里没带 use_last_error=True 的参数
 
     def RegisterHotKey(self, hwnd, id_, mods, vk):
         ok = 0 if vk in self.taken else 1
@@ -67,10 +68,19 @@ class FakeUser32:
 @contextlib.contextmanager
 def fake_windows(fake):
     lib = SimpleNamespace(user32=fake, kernel32=fake, shcore=fake)
+
+    # 真实 Windows 上只有 use_last_error=True 的库才会在调用后保存错误码，ctypes.get_last_error() 读的就是它；
+    # 直接调 GetLastError 可能已被 ctypes 自己的调用覆盖。替身按这个规则：不带 use_last_error=True 就报错，
+    # GetLastError 返回 0。
+    def win_dll(name, *args, **kwargs):
+        if kwargs.get("use_last_error") is not True:
+            fake.bad_windll.append((name, args, kwargs))
+            raise AssertionError(f"WinDLL({name!r}) 必须带 use_last_error=True: {args} {kwargs}")
+        return fake
     with mock.patch.object(ctypes, "windll", lib, create=True), \
-            mock.patch.object(ctypes, "WinDLL", lambda *a, **k: fake, create=True), \
+            mock.patch.object(ctypes, "WinDLL", win_dll, create=True), \
             mock.patch.object(ctypes, "get_last_error", fake.GetLastError, create=True), \
-            mock.patch.object(ctypes, "GetLastError", fake.GetLastError, create=True), \
+            mock.patch.object(ctypes, "GetLastError", lambda: 0, create=True), \
             mock.patch.object(tk_recorder, "IS_WIN", True):
         try:
             yield
@@ -133,7 +143,7 @@ class HotkeyRegistrationTests(unittest.TestCase):
         stack.enter_context(contextlib.redirect_stderr(self.err))
         self.addCleanup(stack.close)
         self.rec.start_hotkeys()
-        self.assertTrue(fake.in_loop.wait(3), "注册线程没有走到消息循环")
+        self.assertTrue(fake.in_loop.wait(3), f"注册线程没有走到消息循环（WinDLL 参数错误: {fake.bad_windll}）")
         time.sleep(0.1)
         self.rec.root.run_pending()
 
@@ -204,6 +214,9 @@ class HotkeyRegistrationTests(unittest.TestCase):
         review.watch(SimpleNamespace(wait=lambda: 0))
         self.assertEqual(states[-1]["event"], "recorded", states[-1])
         self.assertEqual(states[-1]["message"], meta["warning"])
+        # 只是热键提示，录制本身完整：不能标成 incomplete（否则状态显示异常、recover_session 也不再拒绝）
+        self.assertIs(meta.get("incomplete", False), False, meta)
+        self.assertIs(states[-1]["incomplete"], False, states[-1])
 
     # 3c 其他错误码原样写出，不说成"被占用"
     def test_other_error_code_is_reported_as_is(self):
@@ -244,6 +257,37 @@ class HotkeyRegistrationTests(unittest.TestCase):
             self.rec.start_hotkeys()
             self.assertEqual(self.rec.countdown_hint(), "Alt+Shift+S 完成 · 点一下跳过")
 
+    # 3g on_event 抛异常（例如 stdout 管道断开）：注册线程不能退出，其余键照常注册、照常分发
+    def test_on_event_error_does_not_stop_hotkey_thread(self):
+        def broken(event):
+            raise BrokenPipeError(32, "Broken pipe")
+        self.rec.on_event = broken
+        fake = FakeUser32(taken={VK_P, VK_M}, deliver=[3])
+        self.start(fake)
+        self.assertEqual([vk for _, _, vk, _ in fake.calls], [VK_P, VK_M, VK_S], "on_event 出错后应继续注册")
+        self.assertEqual(self.commands, ["stop"], "注册成功的键应照常分发")
+        self.assertEqual([f["hotkey"] for f in self.rec.hotkey_failures], ["Alt+Shift+P", "Alt+Shift+M"])
+        lines = self.err.getvalue().splitlines()
+        self.assertEqual(len([line for line in lines if "is taken by another app" in line]), 2, lines)
+        self.assertEqual(len([line for line in lines if "hotkey_unavailable" in line and "BrokenPipeError" in line]), 2,
+                         lines)
+        self.assertIn("Alt+Shift+P", self.finalize()["warning"])
+
+    # 3h 注册本身抛异常：hotkeys_ready 仍要 set，倒计时不会一直等
+    def test_registration_error_still_sets_ready(self):
+        fake = FakeUser32()
+
+        def boom(*args):
+            raise OSError("RegisterHotKey failed")
+        fake.RegisterHotKey = boom
+        hook = []
+        with mock.patch.object(threading, "excepthook", hook.append), fake_windows(fake), \
+                contextlib.redirect_stderr(self.err):
+            self.rec.start_hotkeys()
+            self.assertTrue(self.rec.hotkeys_ready.wait(3), "注册出异常后 hotkeys_ready 没有 set")
+            self.assertTrue(wait_for(lambda: hook), "异常应交给 threading.excepthook")
+        self.assertIsInstance(hook[0].exc_value, OSError)
+
     # 4 全部被占用：每个键一行，不崩溃，消息循环照常进入
     def test_all_taken_reports_each_once_and_keeps_running(self):
         fake = FakeUser32(taken={VK_P, VK_M, VK_S, VK_A})
@@ -281,7 +325,10 @@ class RealConflictOnWindows(unittest.TestCase):
                 user32.PostThreadMessageW(t.native_id, WM_QUIT, 0, 0)
                 t.join(3)
             self.assertTrue(ok, f"真实冲突下 stderr 没有提示: {err.getvalue()!r}")
-            self.assertTrue([e for e in events if e.get("event") == "hotkey_unavailable"], events)
+            self.assertIn("Alt+Shift+P (pause) is taken by another app", err.getvalue())
+            hits = [e for e in events if e.get("event") == "hotkey_unavailable" and e.get("hotkey") == "Alt+Shift+P"]
+            self.assertEqual(len(hits), 1, events)
+            self.assertEqual(hits[0].get("error"), ERROR_HOTKEY_ALREADY_REGISTERED, hits)
 
 
 if __name__ == "__main__":

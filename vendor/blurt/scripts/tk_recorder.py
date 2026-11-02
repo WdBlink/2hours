@@ -643,9 +643,19 @@ class TkRecorder:
                         continue
                     error = ctypes.get_last_error()
                     why = "is taken by another app" if error == ERROR_HOTKEY_ALREADY_REGISTERED else "could not be registered"
-                    print(f"hotkey {label} ({action}) {why} (error {error})", file=sys.stderr, flush=True)
                     self.hotkey_failures.append({"hotkey": label, "action": action, "name": name, "error": error})
-                    self.on_event({"event": "hotkey_unavailable", "hotkey": label, "action": action, "error": error})
+                    # Reporting must not end this thread: the other keys still need registering and dispatching.
+                    try:
+                        print(f"hotkey {label} ({action}) {why} (error {error})", file=sys.stderr, flush=True)
+                    except Exception:
+                        pass
+                    try:
+                        self.on_event({"event": "hotkey_unavailable", "hotkey": label, "action": action, "error": error})
+                    except Exception as exc:
+                        try:
+                            print(f"hotkey_unavailable event for {label} failed: {exc!r}", file=sys.stderr, flush=True)
+                        except Exception:
+                            pass
             finally:
                 self.hotkeys_ready.set()
             msg = wintypes.MSG()
