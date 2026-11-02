@@ -50,7 +50,7 @@
     "scripts/doctor.py": "Report the actual recording identity and explain app-specific permissions without requesting them. Windows: probe Tk/PortAudio and declare sounddevice for isolated uv diagnostics.",
     "recorder/macos/BlurtRecorder.swift": "Read bundle identity and paths, use distribution labels/icons/notification names, accept command files, and support permission-free identity diagnostics. Selectively port 1.0.2 four-second movie fragments and disabled frame reordering; this does not implement automatic restart or stitching. Keep static video and silent tracks advancing; normalize PCM through AVAudioConverter before filling silence, drain pending media on stop, and retain failed app sessions.",
     "scripts/transcribe.py": "Pin a SHA-256 per model download source and discard downloads that do not match (hashes from Hugging Face LFS oids and the GitHub release digest, checked 2026-11-02).",
-    "scripts/tk_recorder.py": "Consume the shared append-only command log without unlinking files held by concurrent writers. Windows: enforce max duration, retain failed/empty segments, stop on callback errors, include audio frame/overflow telemetry."
+    "scripts/tk_recorder.py": "Consume the shared append-only command log without unlinking files held by concurrent writers. Windows: enforce max duration, retain failed/empty segments, stop on callback errors, include audio frame/overflow telemetry. Windows hotkeys (2026-11-02, from upstream 0884db7d): check each RegisterHotKey result and report a failed key on stderr with its Windows error code (ctypes use_last_error), as a hotkey_unavailable event and as a Chinese warning in the recording result; dispatch only registered ids; the countdown hint lists only registered keys; a failing on_event does not stop the hotkey thread."
   },
   "upstream_inspected": {
     "version": "1.0.2",
@@ -58,7 +58,8 @@
     "verified_on": "2026-10-28",
     "scope": "Selectively reviewed upstream recording and annotation changes; the bundled baseline remains 0.5.0.",
     "selected_changes": [
-      "Use four-second movie fragments and disable video frame reordering, as in the upstream macOS recorder, to improve recoverability after interrupted writing."
+      "Use four-second movie fragments and disable video frame reordering, as in the upstream macOS recorder, to improve recoverability after interrupted writing.",
+      "0884db7d (2026-10-21, checked 2026-11-02): copied the RegisterHotKey return check, the stderr line for a taken hotkey and dispatching only registered ids in scripts/tk_recorder.py start_hotkeys. Added locally: the Windows error code, the hotkey_unavailable event, the recording result warning shown in Two Hours, the countdown hint filter and the on_event error guard. Not imported: configurable hotkeys, the Alt+Shift+A screenshot key and the macOS hotkey settings."
     ],
     "not_imported": "The 1.0.2 multi-module application, live/snap/ink flows, segmented writer recovery and standalone review require new protocols and dependencies; they do not replace the existing Two Hours capture and unified review integration."
   }

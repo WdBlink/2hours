@@ -207,6 +207,14 @@ class Picker:
             self.done(None)
 
 
+# Windows global hotkeys: (id, virtual key, label, action, command, Chinese action name). ALT | SHIFT | NOREPEAT.
+HOTKEYS = ((1, 0x50, "Alt+Shift+P", "pause", "toggle", "暂停/继续"),
+           (2, 0x4D, "Alt+Shift+M", "marker", "marker", "标记"),
+           (3, 0x53, "Alt+Shift+S", "stop", "stop", "完成"))
+HOTKEY_MOD = 0x0001 | 0x0004 | 0x4000
+ERROR_HOTKEY_ALREADY_REGISTERED = 1409
+
+
 # ------------------------------------------------------------------ recorder
 class TkRecorder:
     def __init__(self, session: Path, mic: dict | None, fps: int, max_width: int, lang: str, countdown: int,
@@ -225,6 +233,9 @@ class TkRecorder:
         self.result = None
         self.max_minutes = max_minutes
         self.started_wall = None
+        self.hotkeys_ready = threading.Event()   # set once start_hotkeys has tried every key
+        self.hotkeys_ok: set[str] = set()         # actions whose hotkey registered
+        self.hotkey_failures: list[dict] = []
 
     def t(self, a, b):
         return a if zh(self.lang) else b
@@ -291,8 +302,7 @@ class TkRecorder:
         lbl = tk.Label(cw, text=str(n), fg="white", bg=BG, font=("Segoe UI", 64, "bold"))
         lbl.pack(expand=True, fill="both")
         tk.Label(cw, text=self.t("准备，开喷", "Get ready"), fg=MUTED, bg=BG, font=("Segoe UI", 10)).pack()
-        hint = self.t("Alt+Shift+P 暂停/继续 · Alt+Shift+S 完成 · 点一下跳过", "Alt+Shift+P pause · Alt+Shift+S finish · click to skip")
-        tk.Label(cw, text=hint if IS_WIN else self.t("点一下跳过", "click to skip"), fg=MUTED, bg=BG,
+        tk.Label(cw, text=self.countdown_hint(), fg=MUTED, bg=BG,
                  font=("Segoe UI", 8), wraplength=size + 120).pack(pady=(2, 10))
 
         state = {"done": False}
@@ -316,6 +326,26 @@ class TkRecorder:
             self.on_event({"event": "countdown", "n": k})
             self.root.after(1000, lambda: tick(k - 1))
         tick(n)
+
+    def countdown_hint(self) -> str:
+        """Only list hotkeys that registered. Registration runs on its own thread; wait for it briefly."""
+        skip = self.t("点一下跳过", "click to skip")
+        if not IS_WIN:
+            return skip
+        self.hotkeys_ready.wait(0.5)
+        keys = [self.t("Alt+Shift+P 暂停/继续", "Alt+Shift+P pause") if "pause" in self.hotkeys_ok else "",
+                self.t("Alt+Shift+S 完成", "Alt+Shift+S finish") if "stop" in self.hotkeys_ok else ""]
+        return " · ".join([k for k in keys if k] + [skip])
+
+    def hotkey_warning(self) -> str:
+        """Chinese note for the recording result (meta.json warning, shown by review_bridge)."""
+        notes = []
+        for f in self.hotkey_failures:
+            if f["error"] == ERROR_HOTKEY_ALREADY_REGISTERED:
+                notes.append(f"热键 {f['hotkey']}（{f['name']}）已被其他程序占用")
+            else:
+                notes.append(f"热键 {f['hotkey']}（{f['name']}）注册失败（错误 {f['error']}）")
+        return "；".join(notes) + "，本次录制只能用浮动条上的按钮操作。" if notes else ""
 
     def begin(self):
         self.started_wall = time.monotonic()
@@ -564,9 +594,12 @@ class TkRecorder:
         with open(self.session / "events.jsonl", "w", encoding="utf-8") as fh:
             for e in self.events:
                 fh.write(json.dumps(e) + "\n")
-        return {"event": "stopped", "file": str(final), "duration": round(self.elapsed_before, 2),
-                "mic_enabled": self.audio is not None, "audio_frames": self.audio.frames if self.audio else 0,
-                "audio_overflows": self.audio.overflows if self.audio else None}
+        result = {"event": "stopped", "file": str(final), "duration": round(self.elapsed_before, 2),
+                  "mic_enabled": self.audio is not None, "audio_frames": self.audio.frames if self.audio else 0,
+                  "audio_overflows": self.audio.overflows if self.audio else None}
+        if self.hotkey_failures:
+            result["warning"] = self.hotkey_warning()
+        return result
 
     # --- external control: record.py stop/pause/resume/marker, hotkeys
     def poll_commands(self):
@@ -595,17 +628,40 @@ class TkRecorder:
             return
         q: queue.Queue = queue.Queue()
 
+        # Checking RegisterHotKey and dispatching only registered ids follows AGIHunt/blurt (MIT) 0884db7d.
+        # Added here: the Windows error code, a hotkey_unavailable event and a warning in the recording result.
         def loop():
             import ctypes
             from ctypes import wintypes
-            user32 = ctypes.windll.user32
-            MOD = 0x0001 | 0x0004 | 0x4000  # ALT | SHIFT | NOREPEAT
-            for i, vk in enumerate((0x50, 0x4D, 0x53), 1):  # P, M, S
-                user32.RegisterHotKey(None, i, MOD, vk)
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            ids = {}
+            try:
+                for i, vk, label, action, cmd, name in HOTKEYS:
+                    if user32.RegisterHotKey(None, i, HOTKEY_MOD, vk):
+                        ids[i] = cmd
+                        self.hotkeys_ok.add(action)
+                        continue
+                    error = ctypes.get_last_error()
+                    why = "is taken by another app" if error == ERROR_HOTKEY_ALREADY_REGISTERED else "could not be registered"
+                    self.hotkey_failures.append({"hotkey": label, "action": action, "name": name, "error": error})
+                    # Reporting must not end this thread: the other keys still need registering and dispatching.
+                    try:
+                        print(f"hotkey {label} ({action}) {why} (error {error})", file=sys.stderr, flush=True)
+                    except Exception:
+                        pass
+                    try:
+                        self.on_event({"event": "hotkey_unavailable", "hotkey": label, "action": action, "error": error})
+                    except Exception as exc:
+                        try:
+                            print(f"hotkey_unavailable event for {label} failed: {exc!r}", file=sys.stderr, flush=True)
+                        except Exception:
+                            pass
+            finally:
+                self.hotkeys_ready.set()
             msg = wintypes.MSG()
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
                 if msg.message == 0x0312:  # WM_HOTKEY
-                    q.put({1: "toggle", 2: "marker", 3: "stop"}.get(msg.wParam))
+                    q.put(ids.get(msg.wParam))
 
         threading.Thread(target=loop, daemon=True).start()
 
