@@ -93,6 +93,21 @@ REPORT = '''<!doctype html><html><head>
 </head><body><section id="panel-A1"><h2>A1 Test</h2></section></body></html>'''
 
 
+def write_run(run: Path) -> Path:
+    run.mkdir(parents=True)
+    (run / "report.html").write_text(REPORT, encoding="utf-8")
+    (run / "manifest.json").write_text(json.dumps({"run_id": "r", "sources": [{"id": "S1"}], "targets": [],
+                                                   "panels": [{"id": "A1", "title": "A1", "source_ids": ["S1"]}]}),
+                                       encoding="utf-8")
+    return run
+
+
+def write_skill(skill: Path) -> Path:
+    (skill / "scripts").mkdir(parents=True)
+    (skill / "scripts" / "record.py").write_text("")
+    return skill
+
+
 class FakeRoot:
     def __init__(self):
         self.pending = []
@@ -189,12 +204,15 @@ class HotkeyRegistrationTests(unittest.TestCase):
         self.start(FakeUser32(taken={VK_P}))
         result = self.finalize()
         run = self.dir / "run"
-        session = run / "blurt"
-        session.mkdir(parents=True)
-        (run / "report.html").write_text(REPORT, encoding="utf-8")
-        (run / "manifest.json").write_text(json.dumps({"run_id": "r", "sources": [{"id": "S1"}], "targets": [],
-                                                       "panels": [{"id": "A1", "title": "A1", "source_ids": ["S1"]}]}),
-                                           encoding="utf-8")
+        write_run(run)
+        skill = write_skill(self.dir / "skill")
+        states = []
+        review = bridge.ReviewRun(run, skill, states.append)
+        # 和生产一致：bridge 传 --session <review.run>/blurt，record.py cmd_start 先 resolve() 再 finish_session。
+        # 直接用 self.dir 拼的路径不行：Windows CI 的 TEMP 是 8.3 短名（C:\Users\RUNNER~1\...），
+        # ReviewRun 会 resolve 成长名，DONE 行和 watch 的路径对不上。
+        session = Path(str(review.run / "blurt")).resolve()
+        session.mkdir()
         (session / "recording.mp4").write_bytes(b"video")
         out = io.StringIO()
         with mock.patch.object(record, "probe_duration", return_value=3), contextlib.redirect_stdout(out):
@@ -203,11 +221,6 @@ class HotkeyRegistrationTests(unittest.TestCase):
         self.assertIn("Alt+Shift+P", meta.get("warning", ""))
         self.assertIn("已被其他程序占用", meta["warning"])
         self.assertIn('"recording_warning"', out.getvalue())
-        skill = self.dir / "skill"
-        (skill / "scripts").mkdir(parents=True)
-        (skill / "scripts" / "record.py").write_text("")
-        states = []
-        review = bridge.ReviewRun(run, skill, states.append)
         review.state_file = self.dir / "recording.json"
         review.retention = bridge.settings.RetentionSettings(self.dir / ".2hours")
         review.log.write_text(out.getvalue(), encoding="utf-8")
@@ -303,6 +316,64 @@ class HotkeyRegistrationTests(unittest.TestCase):
         self.assertEqual(self.commands, ["toggle", "stop"])
         self.assertNotIn("hotkey", self.err.getvalue().lower())
         self.assertFalse([e for e in self.events if e.get("event") == "hotkey_unavailable"])
+
+
+class RecordingPathAgreementTests(unittest.TestCase):
+    """bridge 打开的 run 路径是别名（符号链接、Windows 8.3 短名）时，record.py 打出的 DONE 行仍要和 watch 对得上。
+
+    走真实的 ReviewRun.start()（只替换 uv 和 Popen）拿到 --session 参数，再按 record.py cmd_start 的做法
+    resolve() 后调用 finish_session 生成 DONE 行，最后由 watch 判定。"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        self.run = write_run(self.root / "run-directory-with-long-name")
+        self.skill = write_skill(self.root / "skill")
+
+    def roundtrip(self, alias):
+        states, launched = [], []
+
+        def spawn(args, **kwargs):
+            done = threading.Event()
+            launched.append((args, done))
+            return SimpleNamespace(wait=lambda: 0 if done.wait(5) else 1)
+        review = bridge.ReviewRun(alias, self.skill, states.append)
+        review.state_file = self.root / "recording.json"
+        review.retention = bridge.settings.RetentionSettings(self.root / ".2hours")
+        with mock.patch.object(bridge.shutil, "which", return_value="uv"), \
+                mock.patch.object(bridge.subprocess, "Popen", side_effect=spawn):
+            review.start()
+        args, done = launched[0]
+        session = Path(args[args.index("--session") + 1]).resolve()   # record.py cmd_start
+        (session / "recording.mp4").write_bytes(b"video")
+        out = io.StringIO()
+        with mock.patch.object(record, "probe_duration", return_value=3), contextlib.redirect_stdout(out):
+            record.finish_session(session, {"event": "stopped"}, {})
+        review.log.write_text(out.getvalue(), encoding="utf-8")
+        done.set()
+        self.assertTrue(wait_for(lambda: states, 5), "watch 没有给出结果")
+        self.assertEqual(states[-1]["event"], "recorded", (states[-1], out.getvalue()))
+
+    def test_symlinked_run_directory(self):
+        alias = self.root / "alias"
+        try:
+            alias.symlink_to(self.run, target_is_directory=True)
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"无法创建符号链接: {error}")
+        self.roundtrip(alias)
+
+    @unittest.skipUnless(os.name == "nt", "8.3 短名只在 Windows 上有")
+    def test_short_8dot3_run_directory(self):
+        from ctypes import wintypes
+        get_short = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+        get_short.argtypes, get_short.restype = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD], wintypes.DWORD
+        buffer = ctypes.create_unicode_buffer(1024)
+        if not get_short(str(self.run), buffer, len(buffer)):
+            self.skipTest(f"GetShortPathNameW 失败（错误 {ctypes.get_last_error()}）")
+        if Path(buffer.value) == self.run:
+            self.skipTest("这台机器的卷关闭了 8.3 短名")
+        self.roundtrip(Path(buffer.value))
 
 
 @unittest.skipUnless(os.name == "nt", "真实热键冲突只能在 Windows 上复现，交给 windows-latest CI")
