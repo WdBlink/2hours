@@ -49,7 +49,7 @@
     "scripts/record.py": "Build and verify a Two Hours bundle, launch it through LaunchServices, forward file commands, preserve recording events, and reject overwriting existing sessions. Recover interrupted native recordings through a validated remux, retain the original file, reject active/completed/discarded sessions, and report incomplete or missing microphone audio. Windows: safe handle-based process queries, reject unsupported native/system-audio options, reject junction/reparse recovery paths, preserve failed mux sources.",
     "scripts/doctor.py": "Report the actual recording identity and explain app-specific permissions without requesting them. Windows: probe Tk/PortAudio and declare sounddevice for isolated uv diagnostics.",
     "recorder/macos/BlurtRecorder.swift": "Read bundle identity and paths, use distribution labels/icons/notification names, accept command files, and support permission-free identity diagnostics. Selectively port 1.0.2 four-second movie fragments and disabled frame reordering; this does not implement automatic restart or stitching. Keep static video and silent tracks advancing; normalize PCM through AVAudioConverter before filling silence, drain pending media on stop, and retain failed app sessions.",
-    "scripts/transcribe.py": "Pin a SHA-256 per model download source and discard downloads that do not match (hashes from Hugging Face LFS oids and the GitHub release digest, checked 2026-11-02).",
+    "scripts/transcribe.py": "Pin a SHA-256 per model download source and discard downloads that do not match (hashes from Hugging Face LFS oids and the GitHub release digest, checked 2026-11-02). The per-model download lock, HTTP Range resume into a .part file, pinned MODEL_SIZES and the .verified marker for installed files are adapted from AGIHunt/blurt b3b836ac (MIT): the lock and resume follow its download_lock() and fetch(); MODEL_SIZES follows the expected size that its fetch() and size manifest use; the .verified marker plays the role of its manifest/folder_complete() check but records size, mtime and SHA-256 per file. Unlike upstream, the whole-file SHA-256 check is kept: the complete file is hashed from disk after a resume and before it is installed, the lock is taken inside download() and the final file is checked again after it, an unfinished .part is kept while a complete but wrong one is deleted, and an installed file is hashed once before the marker trusts its size and mtime.",
     "scripts/tk_recorder.py": "Consume the shared append-only command log without unlinking files held by concurrent writers. Windows: enforce max duration, retain failed/empty segments, stop on callback errors, include audio frame/overflow telemetry."
   },
   "upstream_inspected": {
@@ -58,7 +58,8 @@
     "verified_on": "2026-10-28",
     "scope": "Selectively reviewed upstream recording and annotation changes; the bundled baseline remains 0.5.0.",
     "selected_changes": [
-      "Use four-second movie fragments and disable video frame reordering, as in the upstream macOS recorder, to improve recoverability after interrupted writing."
+      "Use four-second movie fragments and disable video frame reordering, as in the upstream macOS recorder, to improve recoverability after interrupted writing.",
+      "Lock and resume model downloads, adapted from b3b836ac (MIT): one lock per model file and HTTP Range resume; the whole-file SHA-256 check that upstream dropped is kept."
     ],
     "not_imported": "The 1.0.2 multi-module application, live/snap/ink flows, segmented writer recovery and standalone review require new protocols and dependencies; they do not replace the existing Two Hours capture and unified review integration."
   }
