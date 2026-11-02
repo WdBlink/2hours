@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from datetime import datetime
 
 GIB = 1024 ** 3
@@ -26,6 +27,9 @@ if os.name == "nt":
     _job_module = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_job_module)
     WindowsJobProcess = _job_module.JobProcess
+_spec = importlib.util.spec_from_file_location("resource_asr_lock", Path(__file__).with_name("asr_lock.py"))
+asr_lock = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(asr_lock)
 
 
 class RUsageInfoV4(ctypes.Structure):
@@ -273,7 +277,20 @@ def run_stage(args, sampler=None):
     journal = Journal(Path(args.output), args.stage)
     process = None
     exit_code = 1
+    locks = ExitStack()
     try:
+        held = None
+        if args.command and asr_lock.is_transcription(args.command):
+            # Wait for the machine-wide ASR lock before the stage clock starts: queueing behind
+            # another transcription is not part of --timeout. The child gets the lock handed over.
+            try:
+                held = locks.enter_context(asr_lock.slot(handoff=True))
+            except asr_lock.LockTimeout as error:
+                journal.summary.update(state="lock_timeout", reason=str(error))
+                print(error, file=sys.stderr, flush=True)
+                return asr_lock.TIMEOUT_EXIT
+            journal.summary["asr_lock_wait_seconds"] = round(held.waited, 3)
+        env = {**os.environ, **held.env} if held else None
         sampler = sampler or Sampler()
         initial = sampler()
         journal.summary["initial_system"] = initial["system"]
@@ -295,11 +312,12 @@ def run_stage(args, sampler=None):
         with (journal.directory / "command.log").open("x", encoding="utf-8") as log:
             if args.command:
                 if os.name == "nt":
-                    process = WindowsJobProcess(args.command, log)
+                    process = WindowsJobProcess(args.command, log, env=env)
                 else:
                     process = subprocess.Popen(["/usr/bin/nice", "-n", "10", *args.command],
                                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                               start_new_session=True)
+                                               start_new_session=True, env=env,
+                                               pass_fds=held.pass_fds if held else ())
                 if hasattr(sampler, "set_stage"):
                     sampler.set_stage(process)
                 journal.summary["pid"] = process.pid
@@ -340,6 +358,7 @@ def run_stage(args, sampler=None):
             if process:
                 stop_group(process)
         finally:
+            locks.close()
             journal.close()
             print(json.dumps({"stage": args.stage, "state": journal.summary["state"],
                               "reason": journal.summary.get("reason"),

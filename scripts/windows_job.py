@@ -64,7 +64,7 @@ def _kernel():
 
 
 class JobProcess:
-    def __init__(self, command, log):
+    def __init__(self, command, log, env=None):
         if os.name != "nt":
             raise RuntimeError("Windows job objects require Windows")
         self.api = _kernel()
@@ -85,7 +85,7 @@ class JobProcess:
                         "if gate == b'G' else 125)")
             self.process = subprocess.Popen(
                 [sys.executable, "-c", launcher, *command], stdin=subprocess.PIPE,
-                stdout=log, stderr=subprocess.STDOUT,
+                stdout=log, stderr=subprocess.STDOUT, env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
             if not self.api.AssignProcessToJobObject(self.job, int(self.process._handle)):
                 raise ctypes.WinError(ctypes.get_last_error())
