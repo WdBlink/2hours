@@ -106,7 +106,7 @@ class RecorderTests(unittest.TestCase):
     def test_no_independent_blurt_is_required_or_changed(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            env = dict(os.environ, HOME=str(home), BLURT_HOME=str(home / "unrelated-blurt"))
+            env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), BLURT_HOME=str(home / "unrelated-blurt"))
             output = subprocess.check_output([sys.executable, str(SCRIPTS / "record.py"), "identity"], env=env, text=True)
             info = json.loads(output)
             self.assertEqual(info["home"], str(home / ".2hours/recorder"))
@@ -167,7 +167,7 @@ class RecorderTests(unittest.TestCase):
                 self.assertEqual(result["event"], terminal["event"])
                 if result["event"] == "stopped":
                     self.assertEqual(result["region"], [1, 2, 300, 200])
-                self.assertEqual(self.argv[:5], ["/usr/bin/open", "-n", "-W", "-a", "/fixture/Two Hours.app"])
+                self.assertEqual(self.argv[:5], ["/usr/bin/open", "-n", "-W", "-a", str(Path("/fixture/Two Hours.app"))])
                 self.assertEqual(self.argv[-2:], ["--commands", str(session / ".cmd")])
                 self.assertNotEqual(self.argv[self.argv.index("--stdout") + 1], self.argv[self.argv.index("--stderr") + 1])
 

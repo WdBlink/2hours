@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import io
 import json
 import os
@@ -44,19 +45,28 @@ use_system_certs()
 
 SR = 16000
 SENSEVOICE_REPO = "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+# Every source is pinned to the SHA-256 of the exact file it serves; a download that does not match is
+# discarded and the next source is tried. Sources (checked 2026-11-02): Hugging Face LFS oids
+# (api/models/<repo>/paths-info/main), the GitHub release asset digest for silero_vad.onnx, and for the
+# non-LFS tokens.txt a download whose git blob id matched the repo tree (2cfc92fc...).
+# The GitHub silero_vad.onnx is a different (newer) build than the Hugging Face copy, hence two hashes.
+SILERO_GITHUB_SHA256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+SILERO_HF_SHA256 = "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28"
+SENSEVOICE_MODEL_SHA256 = "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+SENSEVOICE_TOKENS_SHA256 = "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
 MODEL_FILES = {
     "silero_vad.onnx": [
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
-        "https://huggingface.co/csukuangfj/vad/resolve/main/silero_vad.onnx",
-        "https://hf-mirror.com/csukuangfj/vad/resolve/main/silero_vad.onnx",
+        ("https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx", SILERO_GITHUB_SHA256),
+        ("https://huggingface.co/csukuangfj/vad/resolve/main/silero_vad.onnx", SILERO_HF_SHA256),
+        ("https://hf-mirror.com/csukuangfj/vad/resolve/main/silero_vad.onnx", SILERO_HF_SHA256),
     ],
     "sensevoice/model.int8.onnx": [
-        f"https://huggingface.co/{SENSEVOICE_REPO}/resolve/main/model.int8.onnx",
-        f"https://hf-mirror.com/{SENSEVOICE_REPO}/resolve/main/model.int8.onnx",
+        (f"https://huggingface.co/{SENSEVOICE_REPO}/resolve/main/model.int8.onnx", SENSEVOICE_MODEL_SHA256),
+        (f"https://hf-mirror.com/{SENSEVOICE_REPO}/resolve/main/model.int8.onnx", SENSEVOICE_MODEL_SHA256),
     ],
     "sensevoice/tokens.txt": [
-        f"https://huggingface.co/{SENSEVOICE_REPO}/resolve/main/tokens.txt",
-        f"https://hf-mirror.com/{SENSEVOICE_REPO}/resolve/main/tokens.txt",
+        (f"https://huggingface.co/{SENSEVOICE_REPO}/resolve/main/tokens.txt", SENSEVOICE_TOKENS_SHA256),
+        (f"https://hf-mirror.com/{SENSEVOICE_REPO}/resolve/main/tokens.txt", SENSEVOICE_TOKENS_SHA256),
     ],
 }
 
@@ -67,29 +77,34 @@ def download(rel: str) -> Path:
     if dest.exists() and dest.stat().st_size > 0:
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
-    urls = MODEL_FILES[rel]
+    sources = MODEL_FILES[rel]
     if os.environ.get("BLURT_HF_MIRROR"):  # force the China-friendly mirror first
-        urls = sorted(urls, key=lambda u: "hf-mirror" not in u)
+        sources = sorted(sources, key=lambda source: "hf-mirror" not in source[0])
     last = None
-    for url in urls:
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    for url, expected in sources:
         try:
             print(f"downloading {rel} <- {url}", file=sys.stderr, flush=True)
-            tmp = dest.with_suffix(dest.suffix + ".part")
+            digest = hashlib.sha256()
             with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "blurt"}), timeout=30) as r, \
                     open(tmp, "wb") as f:
                 total, done, t0 = int(r.headers.get("content-length") or 0), 0, time.time()
                 while chunk := r.read(1 << 20):
                     f.write(chunk)
+                    digest.update(chunk)
                     done += len(chunk)
                     if total and time.time() - t0 > 2:
                         print(f"  {done >> 20}/{total >> 20} MB", file=sys.stderr, flush=True)
                         t0 = time.time()
+            if digest.hexdigest() != expected:
+                raise ValueError(f"SHA-256 mismatch for {url}: expected {expected}, got {digest.hexdigest()}")
             os.replace(tmp, dest)
             return dest
         except Exception as e:  # try next mirror
             last = e
             print(f"  failed: {e}", file=sys.stderr)
-    die(f"Could not download {rel}: {last}. Set BLURT_HF_MIRROR=1 or download manually to {dest}")
+            tmp.unlink(missing_ok=True)
+    die(f"Could not download a verified {rel}: {last}. Set BLURT_HF_MIRROR=1 or download manually to {dest}")
 
 
 # ------------------------------------------------------------------ audio + VAD

@@ -74,12 +74,36 @@ def die(msg: str, code: int = 1) -> None:
     sys.exit(code)
 
 
-def ffmpeg_bin(name: str = "ffmpeg") -> str:
+def find_ffmpeg(name: str = "ffmpeg") -> str | None:
+    """Find an installed tool, including winget before the parent app refreshes PATH."""
     path = shutil.which(name)
+    if not path and IS_WIN and name in ("ffmpeg", "ffprobe"):
+        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+        candidates = [local / "Microsoft/WinGet/Links" / f"{name}.exe"]
+        candidates += sorted((local / "Microsoft/WinGet/Packages").glob(
+            f"Gyan.FFmpeg*/*/bin/{name}.exe"), reverse=True)
+        path = next((str(candidate) for candidate in candidates if candidate.is_file()), None)
+    return path
+
+
+def ffmpeg_bin(name: str = "ffmpeg") -> str:
+    path = find_ffmpeg(name)
     if not path:
         hint = "brew install ffmpeg" if IS_MAC else "winget install Gyan.FFmpeg" if IS_WIN else "sudo apt install ffmpeg"
         die(f"{name} not found on PATH. Install it first: {hint}")
     return path
+
+
+def has_link_component(path: Path) -> bool:
+    """Reject symlinks and Windows reparse points, including directory junctions."""
+    for part in (path, *path.parents):
+        try:
+            value = part.lstat()
+        except FileNotFoundError:
+            continue
+        if part.is_symlink() or getattr(value, "st_file_attributes", 0) & 0x400:
+            return True
+    return False
 
 
 def run(cmd: list[str], check: bool = True, capture: bool = True, **kw) -> subprocess.CompletedProcess:

@@ -64,7 +64,7 @@ class RunTests(unittest.TestCase):
                 self.assertEqual(report["recorder"]["name"], "Two Hours")
                 self.assertEqual(report["recorder"]["bundle_id"], "dev.twohours.recorder")
                 self.assertEqual(report["recording_permissions"], "not_tested")
-                self.assertTrue(report["asr"][-1].endswith("vendor/blurt/scripts/doctor.py"))
+                self.assertEqual(Path(report["asr"][-1]), root / "vendor/blurt/scripts/doctor.py")
                 for response in (subprocess.CompletedProcess([], 1, "", "source drift"), subprocess.CompletedProcess([], 0, "bad json", ""), subprocess.CompletedProcess([], 0, '{"built": false}', "")):
                     with self.subTest(workflow_response=response):
                         workflow_check.return_value = response

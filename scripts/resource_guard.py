@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Run one foreground media stage with a macOS memory gate and private telemetry."""
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["psutil>=7.0; sys_platform == 'win32'"]
+# ///
+"""Run one foreground media stage with a macOS/Windows memory gate and telemetry."""
 import argparse
 import ctypes
+import importlib.util
 import json
 import math
 import os
@@ -15,6 +20,12 @@ from datetime import datetime
 
 GIB = 1024 ** 3
 PAUSED = 75
+
+if os.name == "nt":
+    _spec = importlib.util.spec_from_file_location("resource_windows_job", Path(__file__).with_name("windows_job.py"))
+    _job_module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_job_module)
+    WindowsJobProcess = _job_module.JobProcess
 
 
 class RUsageInfoV4(ctypes.Structure):
@@ -32,6 +43,15 @@ class RUsageInfoV4(ctypes.Structure):
             "serviced_energy interval_max_phys_footprint runnable_time"
         ).split()
     ]
+
+
+class WindowsPerformanceInfo(ctypes.Structure):
+    # https://learn.microsoft.com/windows/win32/api/psapi/ns-psapi-performance_information
+    _fields_ = [("cb", ctypes.c_uint32)] + [
+        (name, ctypes.c_size_t) for name in (
+            "CommitTotal CommitLimit CommitPeak PhysicalTotal PhysicalAvailable "
+            "SystemCache KernelTotal KernelPaged KernelNonpaged PageSize").split()
+    ] + [(name, ctypes.c_uint32) for name in ("HandleCount", "ProcessCount", "ThreadCount")]
 
 
 def stamp():
@@ -61,13 +81,23 @@ def parse_system(sysctl, vmstat):
 
 class Sampler:
     def __init__(self):
+        self.stage = None
+        if sys.platform == "win32":
+            import psutil
+            self.psutil = psutil
+            self.performance_api = ctypes.WinDLL("psapi", use_last_error=True)
+            self.performance_api.GetPerformanceInfo.argtypes = [ctypes.POINTER(WindowsPerformanceInfo), ctypes.c_uint32]
+            self.performance_api.GetPerformanceInfo.restype = ctypes.c_int
+            return
         if sys.platform != "darwin":
-            raise RuntimeError("memory protection currently requires macOS; refusing unguarded execution")
+            raise RuntimeError("memory protection requires macOS or Windows; refusing unguarded execution")
         self.lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
         self.lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
         self.lib.proc_pid_rusage.restype = ctypes.c_int
 
     def __call__(self):
+        if sys.platform == "win32":
+            return self.windows_sample()
         system = parse_system(command_output([
             "sysctl", "hw.memsize", "vm.swapusage", "kern.memorystatus_vm_pressure_level"
         ]), command_output(["vm_stat"]))
@@ -91,16 +121,71 @@ class Sampler:
             raise RuntimeError("process sampling returned no records")
         return {"time": stamp(), "system": system, "processes": processes}
 
+    def set_stage(self, process):
+        self.stage = process
+
+    def windows_sample(self):
+        psutil = self.psutil
+        memory, swap = psutil.virtual_memory(), psutil.swap_memory()
+        performance = WindowsPerformanceInfo()
+        performance.cb = ctypes.sizeof(performance)
+        if not self.performance_api.GetPerformanceInfo(ctypes.byref(performance), performance.cb):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not performance.CommitLimit:
+            raise RuntimeError("Windows returned an invalid system commit limit")
+        commit_percent = performance.CommitTotal * 100 / performance.CommitLimit
+        # Windows psutil exposes pagefile usage but not compressed-memory size
+        # or cumulative page-out traffic. Unsupported counters remain null.
+        system = {
+            "pressure": 2 if memory.percent >= 90 or commit_percent >= 90 else 1,
+            "ram_bytes": memory.total, "available_bytes": memory.available,
+            "memory_percent": memory.percent, "commit_percent": commit_percent,
+            "commit_bytes": performance.CommitTotal * performance.PageSize,
+            "commit_limit_bytes": performance.CommitLimit * performance.PageSize,
+            "swap_used_bytes": swap.used,
+            "compressor_bytes": None, "swapout_bytes": None,
+        }
+        members = self.stage.pids() if self.stage else set()
+        processes = []
+        for process in psutil.process_iter():
+            try:
+                with process.oneshot():
+                    info = process.memory_info()
+                    birth = process.create_time()
+                    processes.append({
+                        "key": f"{process.pid}:{birth}", "pid": process.pid,
+                        "ppid": process.ppid(),
+                        "pgid": self.stage.pid if process.pid in members else 0,
+                        "name": process.name(), "rss_bytes": info.rss,
+                        "footprint_bytes": info.private,
+                        "lifetime_peak_bytes": max(info.peak_wset, info.peak_pagefile),
+                    })
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if not processes:
+            raise RuntimeError("Windows process sampling returned no records")
+        if self.stage:
+            # A target may exit during enumeration. A live owned PID that
+            # cannot be read must instead stop the stage, never run unguarded.
+            live_members = self.stage.pids()
+            missing = (members & live_members) - {p["pid"] for p in processes}
+            if missing:
+                raise RuntimeError(f"cannot sample live stage processes: {sorted(missing)}")
+            for process in processes:
+                process["pgid"] = self.stage.pid if process["pid"] in live_members else 0
+        return {"time": stamp(), "system": system, "processes": processes}
+
 
 def pressure_reason(sample, initial, pgid, max_stage_bytes, max_swap_growth_bytes):
     system = sample["system"]
     if system["pressure"] != 1:
         return f"system memory pressure={system['pressure']} (normal=1)"
-    if system["compressor_bytes"] > system["ram_bytes"] * 0.40:
+    if system["compressor_bytes"] is not None and system["compressor_bytes"] > system["ram_bytes"] * 0.40:
         return "compressor exceeds 40% of physical memory"
     if system["swap_used_bytes"] - initial["system"]["swap_used_bytes"] > max_swap_growth_bytes:
         return "swap grew beyond the stage allowance"
-    if system["swapout_bytes"] - initial["system"]["swapout_bytes"] > max_swap_growth_bytes:
+    if (system["swapout_bytes"] is not None and initial["system"]["swapout_bytes"] is not None
+            and system["swapout_bytes"] - initial["system"]["swapout_bytes"] > max_swap_growth_bytes):
         return "swap-out traffic exceeded the stage allowance"
     owned = [p for p in sample["processes"] if pgid and p["pgid"] == pgid]
     total = sum(max(p["rss_bytes"], p["footprint_bytes"] or 0) for p in owned)
@@ -149,7 +234,7 @@ class Journal:
     def save(self):
         target = self.directory / "summary.json"
         tmp = target.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.summary, ensure_ascii=False, indent=2) + "\n")
+        tmp.write_text(json.dumps(self.summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         tmp.replace(target)
 
     def close(self):
@@ -160,6 +245,9 @@ class Journal:
 
 def stop_group(process):
     """Release only this stage's resources; suspended processes retain their allocations."""
+    if os.name == "nt":
+        process.stop()
+        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -206,9 +294,14 @@ def run_stage(args, sampler=None):
         start = time.monotonic()
         with (journal.directory / "command.log").open("x", encoding="utf-8") as log:
             if args.command:
-                process = subprocess.Popen(["/usr/bin/nice", "-n", "10", *args.command],
-                                           stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                           start_new_session=True)
+                if os.name == "nt":
+                    process = WindowsJobProcess(args.command, log)
+                else:
+                    process = subprocess.Popen(["/usr/bin/nice", "-n", "10", *args.command],
+                                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                               start_new_session=True)
+                if hasattr(sampler, "set_stage"):
+                    sampler.set_stage(process)
                 journal.summary["pid"] = process.pid
             journal.summary["state"] = "running" if process else "observing"
             journal.save()

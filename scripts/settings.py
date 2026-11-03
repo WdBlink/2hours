@@ -12,6 +12,11 @@ _spec = importlib.util.spec_from_file_location("retention_dispatch", Path(__file
 dispatch = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dispatch)
 
+if os.name == "nt":
+    _windows_spec = importlib.util.spec_from_file_location("retention_windows", Path(__file__).with_name("windows_files.py"))
+    windows_files = importlib.util.module_from_spec(_windows_spec)
+    _windows_spec.loader.exec_module(windows_files)
+
 POLICIES = {"keep": ("一直保留", None), "after_review": ("处理并完成审核后", 0),
             "1_day": ("保留 1 天", 1), "2_days": ("保留 2 天", 2),
             "1_week": ("保留 1 周", 7), "1_month": ("保留 1 个月（30 天）", 30)}
@@ -19,7 +24,14 @@ MEDIA = ("recording.mp4", "audio.wav", "video.mkv")
 
 
 def safe(path):
-    return not any(part.is_symlink() for part in (path, *path.parents))
+    return not any(dispatch.is_link(part) for part in (path, *path.parents))
+
+
+def process_alive(pid):
+    if os.name == "nt":
+        return windows_files.process_alive(pid)
+    os.kill(pid, 0)
+    return True
 
 
 def signature(value):
@@ -98,7 +110,8 @@ class RetentionSettings:
             pid = value.get("pid")
             if type(pid) is not int or pid <= 0:
                 return "unknown"
-            os.kill(pid, 0)
+            if not process_alive(pid):
+                return None
             return str(Path(value["session"]).absolute())
         except ProcessLookupError:
             return None
@@ -128,8 +141,11 @@ class RetentionSettings:
                     if not path.exists() and not path.is_symlink():
                         continue
                     info = path.lstat()
+                    if os.name == "nt" and stat.S_ISREG(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400:
+                        info = windows_files.file_stat(path)
                     blocked = reason
-                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                            or getattr(info, "st_file_attributes", 0) & 0x400):
                         blocked = "符号链接、硬链接或非普通文件，已保护"
                     elif not blocked and info.st_mtime_ns > (session / "items.json").stat().st_mtime_ns:
                         blocked = "录音晚于处理结果，需重新处理，已保护"
@@ -163,6 +179,10 @@ class RetentionSettings:
                 try:
                     if not safe(run / ".dispatch.lock"):
                         raise ValueError("运行目录或锁含符号链接，已保留")
+                    if os.name == "nt":
+                        self.cleanup_windows(path, run, row)
+                        deleted.append(row["path"])
+                        continue
                     with ExitStack() as stack:
                         descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
                         stack.callback(os.close, descriptor)
@@ -201,6 +221,22 @@ class RetentionSettings:
                 except (OSError, ValueError) as error:
                     failed.append({"path": row["path"], "error": str(error), "recovery_path": recovery_path})
             return {"deleted": deleted, "failed": failed, "preview": self.preview()}
+
+    def cleanup_windows(self, path, run, row):
+        # Pin the entire parent chain before taking the run lock. All later opens
+        # now refer to that chain, and replacement/rename attempts fail closed.
+        with windows_files.pinned_parents(path) as parent, dispatch.locked(run):
+            with windows_files.media_handle(path, parent=parent) as media:
+                info = media.stat()
+                if signature(info) != row["signature"]:
+                    raise ValueError("文件已变化，已保留")
+                self.check_cleanup_protection(run, info)
+                # Recheck both metadata and review while the media handle excludes
+                # writes/deletes; delete through that handle, never through a path.
+                if signature(media.stat()) != row["signature"]:
+                    raise ValueError("文件已变化，已保留")
+                self.check_cleanup_protection(run, info)
+                media.delete()
 
     def check_cleanup_protection(self, run, info):
         reason = self.protection(run)

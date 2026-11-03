@@ -7,6 +7,14 @@ description: "集中审阅与任务分发入口。按日期回看 Codex 工作�
 
 在当前会话完成准备、审阅接力和分发。用户提供时间范围；交付证据报告、保留原话的决策、明确目标的派发回执。会话梳理由上游 agent-note-cli 完成，本入口消费其工作线索引与深读，组合阅读材料、审阅界面和任务派发。
 
+## Windows 本机运行
+
+Windows 首次在技能目录执行 `powershell -NoProfile -ExecutionPolicy Bypass -File SKILL/scripts/windows-dev.ps1 setup`，需要代理时追加 `-Proxy http://127.0.0.1:端口`。此命令不会采集屏幕或声音。之后用 `SKILL/.venv/Scripts/python.exe` 替代本文中的 `python3`；PowerShell 回合设置 `$env:PYTHONUTF8='1'`。录制、转录与抽帧脚本自动发现 winget 安装的 ffmpeg。
+
+Windows 使用 Tk 选择器和控制条，不执行 Swift 构建或 macOS 授权步骤；只在用户主动开始时录制。转录、扫描、抽帧同样通过资源守护器串行执行，在 Windows Job Object 中运行：目标及其直接派生的子孙进程会在守护器关闭 Job 时一并结束；经 WMI、计划任务、COM 或服务等 Job 之外的代理启动的进程不受此约束。完整操作见 [Windows 开发说明](references/windows-development.md)。
+
+Cubox 为可选来源：未配置账号时明确列为 `not_configured`，仍可审阅 Codex 工作；不将登录缺失记为“没有新增收藏”，不要求用户创建账号。
+
 ## 入口
 
 确定本 SKILL.md 所在绝对目录为 `SKILL`。以下 `RUN` 是本次私有运行目录，均以真实绝对路径替换，不把占位符直接执行。
@@ -61,7 +69,7 @@ python3 SKILL/scripts/review_bridge.py --run RUN
 
 按 Blurt §2–§4 调用现有 transcribe.py、frames.py，读取完整转录并查看必要视频帧。文件位于 RUN/blurt。加载本技能的 [决策 lens](references/decision-lens.md)，在原生 items.json 上增加来源与目标建议。
 
-处理前读取 [内存保护](references/resource-protection.md)。macOS 的转写、扫描与抽帧必须串行通过 `scripts/resource_guard.py` 执行，每阶段单独保存 telemetry；先做 baseline，再运行阶段。压力告警、swap 快速增长或采样失败时停止本阶段并暂停工作流，不自动重试、不继续下一阶段。原始材料和已有结果保持不变，诊断重跑使用独立输出目录。
+处理前读取 [内存保护](references/resource-protection.md)。macOS 和 Windows 的转写、扫描与抽帧必须串行通过 `scripts/resource_guard.py` 执行，每阶段单独保存 telemetry；先做 baseline，再运行阶段。压力告警、swap 快速增长或采样失败时停止本阶段并暂停工作流，不自动重试、不继续下一阶段。原始材料和已有结果保持不变，诊断重跑使用独立输出目录。
 
 以视频中可见的 panel ID 和圈画确定对象，manifest 提供实际来源。`focus.jsonl` 只辅助定位，不以墙钟减 meta.started_at 换算视频时间。暂停、重录、跳到外部网页或同时看见多张卡时，回到帧核对；不确定就保留问题。
 
