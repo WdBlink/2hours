@@ -59,7 +59,7 @@ def init(args):
     manifest = {"run_id": root.name, "scope": scope, "sources": [], "panels": [],
                 "coverage": {"read": 0, "failures": [], "skipped": [], "status": "not_collected"}, "targets": []}
     (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-    print(json.dumps({"run": str(root.resolve()), "scope": scope, "next": "Collect evidence with Traceink and Cubox; write manifest.json and report.md"}, ensure_ascii=False))
+    print(json.dumps({"run": str(root.resolve()), "scope": scope, "next": "Run scripts/work_review.mjs for the bundled Agent Note index and dossiers, collect Cubox articles, then write manifest.json and report.md"}, ensure_ascii=False))
 
 
 def recorder_identity():
@@ -73,7 +73,7 @@ def recorder_identity():
 
 
 def doctor(args):
-    names = ["traceink", "blurt", "cubox", "answer-me-with-html"]
+    names = ["blurt", "cubox", "answer-me-with-html"]
     paths = {name: str(skill_dir(name)) if (skill_dir(name) / "SKILL.md").is_file() else None for name in names}
     bins = {name: shutil.which(name) for name in ["node", "uv", "cubox-cli", "ffmpeg"]}
     cubox = skill_dir("cubox") / "cli/bin" / ("cubox-cli.exe" if os.name == "nt" else "cubox-cli")
@@ -83,8 +83,23 @@ def doctor(args):
     if bins["node"]:
         node_version = subprocess.check_output([bins["node"], "--version"], text=True).strip()
     missing = [name for name, path in {**paths, **bins}.items() if not path]
-    if node_version and int(node_version.lstrip("v").split(".")[0]) < 20:
-        missing.append("Node.js >=20")
+    if node_version and tuple(map(int, node_version.lstrip("v").split(".")[:2])) < (22, 16):
+        missing.append("Node.js >=22.16 (agent-note-cli)")
+    work_review = [bins["node"] or "node", str(ROOT / "scripts/work_review.mjs")]
+    agent_note_source = None
+    work_review_error = None
+    if bins["node"]:
+        try:
+            result = subprocess.run([*work_review, "--check"], capture_output=True, text=True, timeout=30)
+            if result.returncode:
+                raise ValueError(result.stderr.strip() or "workflow check failed")
+            agent_note_source = json.loads(result.stdout)
+            if not isinstance(agent_note_source, dict) or agent_note_source.get("built") is not True:
+                raise ValueError("workflow check did not confirm a verified build")
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            agent_note_source = None
+            work_review_error = str(error)[:1000]
+            missing.append("bundled agent-note workflow (run work_review_setup)")
     recorder = recorder_identity()
     if not recorder or not recorder["bundled"]:
         missing.append("bundled Two Hours recorder")
@@ -96,6 +111,8 @@ def doctor(args):
         if not bins["swiftc"]:
             missing.append("Xcode Command Line Tools (xcode-select --install)")
     print(json.dumps({"skills": paths, "commands": bins, "node_version": node_version,
+                      "work_review": work_review, "agent_note_source": agent_note_source, "work_review_error": work_review_error,
+                      "work_review_setup": [["npm", "ci", "--prefix", str(ROOT / "vendor/agent-note")], [*work_review, "--build"]],
                       "missing": missing, "cubox_setup": ["node", str(skill_dir("cubox") / "cli/scripts/install.js")],
                       "recorder": recorder, "recording_permissions": "not_tested",
                       "asr": [sys.executable, str(ROOT / "vendor/blurt/scripts/doctor.py")]}, ensure_ascii=False, indent=2))

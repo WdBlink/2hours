@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import unittest
 import tempfile
 from unittest.mock import patch
@@ -32,7 +33,7 @@ class RunTests(unittest.TestCase):
     def test_doctor_uses_bundled_executable_and_reports_missing_binary(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ("traceink", "blurt", "cubox", "answer-me-with-html"):
+            for name in ("blurt", "cubox", "answer-me-with-html"):
                 path = root / "vendor" / name
                 path.mkdir(parents=True)
                 (path / "SKILL.md").write_text("example")
@@ -48,21 +49,50 @@ class RunTests(unittest.TestCase):
             binary.parent.mkdir(parents=True)
             binary.write_text("fixture")
             binary.chmod(0o755)
-            with patch.object(run, "ROOT", root), patch.object(run.shutil, "which", side_effect=lambda name: None if name == "cubox-cli" else "/bin/" + name), patch.object(run.subprocess, "check_output", return_value="v20.0.0"):
+            ready = subprocess.CompletedProcess([], 0, json.dumps({"version": "0.6.0", "commit": "pinned-commit", "built": True}), "")
+            with patch.object(run, "ROOT", root), patch.object(run.shutil, "which", side_effect=lambda name: None if name == "cubox-cli" else "/bin/" + name) as which, patch.object(run.subprocess, "check_output", return_value="v22.16.0") as version_check, patch.object(run.subprocess, "run", return_value=ready) as workflow_check:
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
                     self.assertEqual(run.doctor(None), 0)
                 report = json.loads(output.getvalue())
                 self.assertEqual(report["commands"]["cubox-cli"], str(binary))
+                self.assertNotIn("agent-note", report["commands"])
+                self.assertNotIn("traceink", report["skills"])
+                self.assertEqual(report["work_review"], ["/bin/node", str(root / "scripts/work_review.mjs")])
+                self.assertEqual(report["agent_note_source"]["version"], "0.6.0")
+                self.assertEqual(workflow_check.call_args.args[0][-1], "--check")
                 self.assertEqual(report["recorder"]["name"], "Two Hours")
                 self.assertEqual(report["recorder"]["bundle_id"], "dev.twohours.recorder")
                 self.assertEqual(report["recording_permissions"], "not_tested")
                 self.assertTrue(report["asr"][-1].endswith("vendor/blurt/scripts/doctor.py"))
+                for response in (subprocess.CompletedProcess([], 1, "", "source drift"), subprocess.CompletedProcess([], 0, "bad json", ""), subprocess.CompletedProcess([], 0, '{"built": false}', "")):
+                    with self.subTest(workflow_response=response):
+                        workflow_check.return_value = response
+                        output = io.StringIO()
+                        with contextlib.redirect_stdout(output):
+                            self.assertEqual(run.doctor(None), 1)
+                        report = json.loads(output.getvalue())
+                        self.assertIn("bundled agent-note workflow (run work_review_setup)", report["missing"])
+                        self.assertTrue(report["work_review_error"])
+                workflow_check.return_value = ready
+                workflow_check.side_effect = subprocess.TimeoutExpired("workflow", 30)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(run.doctor(None), 1)
+                self.assertIn("bundled agent-note workflow (run work_review_setup)", json.loads(output.getvalue())["missing"])
+                workflow_check.side_effect = None
+                version_check.return_value = "v22.15.0"
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(run.doctor(None), 1)
+                self.assertIn("Node.js >=22.16 (agent-note-cli)", json.loads(output.getvalue())["missing"])
+                version_check.return_value = "v22.16.0"
                 binary.unlink()
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
                     self.assertEqual(run.doctor(None), 1)
                 self.assertIn("cubox-cli", json.loads(output.getvalue())["missing"])
+                self.assertNotIn("agent-note", [call.args[0] for call in which.call_args_list])
 
     def test_week_is_calendar_week(self):
         scope = run.scope_for("last-week", "Asia/Shanghai", now=datetime.fromisoformat("2026-10-23T09:00:00+08:00"))

@@ -19,12 +19,14 @@ $2hours 回看上周，准备本周集中审阅。
 $2hours 继续 /绝对路径/已有运行目录 中尚未分发的任务。
 ```
 
-1. Agent 按 Traceink 的证据合同读取工作记录，结合 Cubox 正文，分别呈现工作卡片与逐篇阅读横条。阅读按文章主题只读关联个人知识库中的相关条目，区分文章、已有知识与推断。首屏先随内容和视口调整密度，达到可读下限后分页。详情说明背景、进展、证据边界和下一步，图示保留实际分支、状态条件、角色交接或循环。
+1. 直接运行移植自 [agent-note-cli](https://github.com/WdBlink/agent-note-cli) 的会话梳理代码，取得工作线索引与深读，结合 Cubox 正文，分别呈现工作卡片与逐篇阅读横条。阅读按文章主题只读关联个人知识库中的相关条目，区分文章、已有知识与推断。首屏先随内容和视口调整密度，达到可读下限后分页。详情说明背景、进展、证据边界和下一步，图示保留实际分支、状态条件、角色交接或循环。
 2. 点击卡片打开详情。可以写意见，也可以点击「开始口述批注」，选择窗口后边看、边说、边圈画。
 3. 完成录制后，Agent 整理原话、截图、AI 理解和目标会话，在 **Two Hours 同一页**呈现统一审核。
 4. 修改或暂缓条目，最后确认一次。Agent 使用 Codex 原生工具分发，逐批保存真实回执。
 
 默认范围是昨天；自然周按当地周一至周日计算。录屏不会随报告预览自动启动。发送成功只表示任务已送达，不表示下游工作已完成。
+
+会话扫描、家族归属、工作线、深读和恢复复用 agent-note-cli 的原样源码与依赖锁文件，位于 `vendor/agent-note/`；Two Hours 的薄适配层直接调用原 `brief()`，无需全局 agent-note CLI。首次生成索引或深读会使用流程配置的分析模型及额度；只读请求只复用已有结果。当前锁定 v0.6.0 后的工作流归属修复提交，默认读取 Codex 与 Claude Code，按本地自然日逐日导出，周报保留各日证据，当日查询不冒充严格的秒级冻结。源码来源、构建、字段映射与同步升级方式见 [上游合同](references/agent-note.md)。
 
 集中审核沿用 Blurt 的专注审阅编排：左侧任务目录，中间大图与缩略图，右侧核对原话并直接编辑任务。文本框随内容自动伸展，截图下方选择暂缓或纳入执行，顶栏完成最终确认。窄屏按顺序显示证据和编辑区。审核界面的样式随服务加载，旧报告重新打开时也能使用新版界面，原报告、录音和批准快照保持不变。
 
@@ -34,14 +36,17 @@ $2hours 继续 /绝对路径/已有运行目录 中尚未分发的任务。
 
 ## 安装
 
-需要 Python 3.10+、Node.js 20+、uv 和 ffmpeg。macOS 录制要求 macOS 13+ 及 Xcode Command Line Tools。Two Hours 自带录制组件，无需单独安装 Blurt；其他平台未做完整录制验证。
+需要 Python 3.10+、Node.js 22.16+、npm、uv 和 ffmpeg。macOS 录制要求 macOS 13+ 及 Xcode Command Line Tools。Two Hours 自带录制组件，无需单独安装 Blurt；其他平台未做完整录制验证。
 
-从独立仓库安装一个 Skill 即可，四个组件的源码与所需资源已收入 `vendor/`，无需分别安装四份全局技能：
+安装 Two Hours Skill，相关流程源码与资源收入 `vendor/`。会话处理代码带上游提交及逐文件哈希，依赖与生成物在本机安装、构建：
 
 ```bash
 # 目标目录已存在时先保留原安装，不要覆盖未提交修改。
 git clone https://github.com/WdBlink/2hours.git "${CODEX_HOME:-$HOME/.codex}/skills/2hours"
 cd "${CODEX_HOME:-$HOME/.codex}/skills/2hours"
+
+npm ci --prefix vendor/agent-note
+node scripts/work_review.mjs --build
 
 # 使用上游安装器获取固定版本的 Cubox 可执行文件；也可复用 PATH 中已有版本。
 node vendor/cubox/cli/scripts/install.js
@@ -101,8 +106,11 @@ python3 scripts/review_bridge.py --run "$DEMO_RUN" --open
 python3 -B -m unittest discover -s tests -v
 node --check assets/bridge.js
 node --check assets/board.js
-node --test vendor/traceink/test/*.test.mjs
+node scripts/sync_agent_note.mjs --check
+node --test tests/agent_note_sync.test.mjs tests/work_review.test.mjs
 ```
+
+在 `vendor/agent-note` 目录运行 `node --import tsx --test backend/upstream/tests/*.test.ts` 可执行随源保留的核心测试。上游更新通过 `scripts/sync_agent_note.mjs --repo PATH --ref TAG_OR_COMMIT` 同步，核对来源后重建并运行兼容测试；具体步骤见 [源码维护说明](references/agent-note.md)。
 
 测试覆盖时间范围、来源映射、实际 AM 图示渲染、看板生成、录制身份、退出分支、统一审核、批准快照和重复派发防护。录制器已通过隔离 HOME 构建；最终品牌版本已从安装目录构建、安装，通过严格签名校验和无采集的 LaunchServices 身份诊断。此检查使用当前 macOS 登录会话，不能证明干净 macOS 用户下的首次权限授予或实际采集；首次使用仍需主动完成上面的短录制检查。
 
@@ -117,10 +125,10 @@ node --test vendor/traceink/test/*.test.mjs
 | 项目 | 锁定版本 / 提交 | 用途 |
 | --- | --- | --- |
 | [Blurt](https://github.com/AGIHunt/blurt) | 0.5.0 · `53171c4`；选择性吸收 1.0.2 · `9b4a0e1` | 录屏、口述转录与圈画证据 |
-| [Traceink](https://github.com/WdBlink/traceink) | 0.2.0 · `ecadc29` | 会话证据与工作线阅读合同 |
+| [agent-note-cli](https://github.com/WdBlink/agent-note-cli) | v0.6.0 后提交 · `74c1537`；原样源码与锁文件 | 会话梳理、工作线索引、深读、证据与恢复的代码上游 |
 | [Cubox CLI](https://github.com/OLCUBO/cubox-cli) | 1.0.10 · `6eb4e7b` | 收藏与正文读取 |
 | [answer-me-with-html](https://github.com/QingYunA/answer-me-with-html) | 0.5.7 · `fa42f5c` | Markdown 排版与 HTML renderer |
 
-四者均按原 MIT 许可集成，各自目录保留完整许可证和 `SOURCE.json`。Blurt 包含 Two Hours 身份与启动方式的本地适配；Traceink 包含本地修订的阅读合同；AM 包含可重建源码、锁文件、renderer bundle 及字体/内嵌依赖许可。报告内容组织也参考了 [ctx-report](https://github.com/motiful/ctx) 的自足上下文思路，不要求配置 CTX。原有版权和许可声明保留。
+四个随包组件均按原 MIT 许可集成，各自目录保留完整许可证和 `SOURCE.json`。Blurt 包含 Two Hours 身份与启动方式的本地适配；AM 包含可重建源码、锁文件、renderer bundle 及字体/内嵌依赖许可。agent-note-cli 的相关处理源码原样移植，嵌套的 Agent Notebook / Traceink 来源与规则仍由上游维护，并保留其原来源记录。报告内容组织也参考了 [ctx-report](https://github.com/motiful/ctx) 的自足上下文思路，不要求配置 CTX。原有版权和许可声明保留。
 
 Two Hours 自有代码自 v0.2.1 起按 [MIT License](LICENSE) 开源；上述第三方组件继续分别适用其原许可证和版权声明。
