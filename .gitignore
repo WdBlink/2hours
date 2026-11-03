@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 .venv/
 node_modules/
+vendor/agent-note/dist/
+vendor/agent-note/BUILD.json
 .env
 .env.*
 !.env.example
