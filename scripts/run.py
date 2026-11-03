@@ -144,33 +144,11 @@ def validate_report(manifest, markdown):
 
 def normalize_label_spacing(markdown):
     """Make bold paragraph and list labels parse when followed by CJK text."""
-    lines = []
-    fence_char, fence_length = None, 0
-    inline_ticks = 0
-    for line in markdown.splitlines(keepends=True):
-        fence = re.match(r"^ {0,3}(?:(?:[-+*]|\d+[.)]) +)?(`{3,}|~{3,})", line)
-        if fence:
-            marker = fence.group(1)
-            if fence_char is None:
-                fence_char, fence_length = marker[0], len(marker)
-            elif marker[0] == fence_char and len(marker) >= fence_length and not line[fence.end():].strip():
-                fence_char, fence_length = None, 0
-        elif fence_char is None:
-            if not line.strip():
-                inline_ticks = 0
-            if not inline_ticks:
-                line = re.sub(r"^( {0,3}(?:(?:[-+*]|\d+[.)])\s+)?\*\*[^*\n]+[：:]\*\*)(?=\S)", r"\1 ", line)
-            for ticks in re.finditer(r"(?<!`)(`+)(?!`)", line):
-                prefix = line[:ticks.start()]
-                if (len(prefix) - len(prefix.rstrip("\\"))) % 2:
-                    continue
-                length = len(ticks.group(1))
-                if not inline_ticks:
-                    inline_ticks = length
-                elif inline_ticks == length:
-                    inline_ticks = 0
-        lines.append(line)
-    return ''.join(lines)
+    spec = importlib.util.spec_from_file_location("twohours_markdown_context", Path(__file__).with_name("markdown_context.py"))
+    context = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(context)
+    return ''.join(re.sub(r"^( {0,3}(?:(?:[-+*]|\d+[.)])\s+)?\*\*[^*\n]+[：:]\*\*)(?=\S)", r"\1 ", line) if prose else line
+                   for _, line, prose in context.prose_lines(markdown))
 
 
 def render(args):
@@ -179,6 +157,11 @@ def render(args):
         raise ValueError("report already frozen; create a new run to change its content")
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     markdown = (root / "report.md").read_text(encoding="utf-8")
+    validate_report(manifest, markdown)
+    spec = importlib.util.spec_from_file_location("twohours_diagrams", Path(__file__).with_name("report_diagrams.py"))
+    diagrams = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(diagrams)
+    markdown = diagrams.expand_diagrams(root, manifest, markdown)
     validate_report(manifest, markdown)
     renderer = skill_dir("answer-me-with-html") / "scripts/am.mjs"
     if not renderer.is_file() or not shutil.which("node"):
