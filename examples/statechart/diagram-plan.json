@@ -1,0 +1,113 @@
+{
+  "schema": "twohours-diagrams/v1",
+  "diagrams": [
+    {
+      "id": "D1",
+      "panel_id": "A1",
+      "question": "为什么还不能算完成",
+      "scope": "虚构演练数据，不代表真实工作",
+      "current_node": "blocked",
+      "limitations": "只证明本地检查，不代表正式验收",
+      "evidence": [
+        {
+          "id": "E1",
+          "source_id": "S1",
+          "file": "sources/facts.json",
+          "pointer": "/fact",
+          "quote": "本地检查通过，但缺少独立验收。",
+          "sha256": "99a5743dca733ba3c17392016659ef225c76709c2c1bc93e8bbbfbbe4bd853af"
+        },
+        {
+          "id": "E2",
+          "source_id": "S1",
+          "file": "sources/facts.json",
+          "pointer": "/gap",
+          "quote": "未核实异常出口。",
+          "sha256": "99a5743dca733ba3c17392016659ef225c76709c2c1bc93e8bbbfbbe4bd853af"
+        }
+      ],
+      "nodes": [
+        {
+          "id": "tested",
+          "label": "本地检查通过",
+          "state": "observed",
+          "basis": "observed",
+          "evidence_ids": [
+            "E1"
+          ]
+        },
+        {
+          "id": "blocked",
+          "label": "等待独立验收",
+          "state": "blocked",
+          "basis": "observed",
+          "evidence_ids": [
+            "E1"
+          ]
+        },
+        {
+          "id": "done",
+          "label": "可验收交付",
+          "state": "proposed",
+          "basis": "proposed",
+          "evidence_ids": [
+            "E1"
+          ]
+        }
+      ],
+      "transitions": [
+        {
+          "id": "T1",
+          "from": "tested",
+          "to": "blocked",
+          "condition": "仍缺独立验收",
+          "basis": "observed",
+          "evidence_ids": [
+            "E1"
+          ]
+        },
+        {
+          "id": "T2",
+          "from": "blocked",
+          "to": "done",
+          "condition": "未来补齐验收",
+          "basis": "proposed",
+          "evidence_ids": [
+            "E1"
+          ]
+        }
+      ],
+      "paths": [
+        {
+          "title": "已有停点",
+          "steps": [
+            "T1"
+          ]
+        },
+        {
+          "title": "建议路线",
+          "steps": [
+            "T1",
+            "T2"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "text": "本地通过不能单独证明完成",
+          "evidence_ids": [
+            "E1"
+          ]
+        }
+      ],
+      "unknowns": [
+        {
+          "text": "异常出口尚未核实",
+          "evidence_ids": [
+            "E2"
+          ]
+        }
+      ]
+    }
+  ]
+}

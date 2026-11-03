@@ -21,6 +21,8 @@ Cubox 来源使用 `provider: cubox`、`card_id`、`url`、`status: full_text|me
 
 会话来源保留 agent-note-cli 的证据 ID、原生 provider / sessionId、sourcePath、range 和 contentHash，在来源的 `upstream` 中登记导出文件与索引版本；工作 panel 的 `upstream_worklines` 保留工作线及对应索引。`work_scope` 单独登记实际日粒度与日期，`scope` 继续保存用户请求范围。覆盖说明继承上游警告、排除、失败和未解决状态，不能把上游缺失索引或失败写成完整读取。原样导出 JSON 保存在私有 `sources/agent-note/`，不进入代码仓库。
 
+图解可选使用 `diagram-plan.json`，绑定节点、条件、停点、回放与文字证据。来源声明其私有快照 `snapshot_file` 或 `upstream.dossier_file`；图计划中的字节哈希、JSON pointer 与原文摘录必须对应这些已登记文件。具体字段及语义审阅见 [图解合同](statechart-report.md)。
+
 每个报告二级标题使用 `## A1 标题` 等 answer-me-with-html 显式 panel ID；与 `panels` 一一对应。卡片上的 ID 是视频定位依据。页面焦点日志只有辅助意义，不可用 `meta.started_at` 直接减去墙钟来推断视频时间，因为选择窗口、倒计时、暂停及重录会改变时基。
 
 ## 理解与路由
