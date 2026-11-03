@@ -132,13 +132,24 @@ def render(args):
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     markdown = (root / "report.md").read_text(encoding="utf-8")
     validate_report(manifest, markdown)
+    spec = importlib.util.spec_from_file_location("twohours_diagrams", Path(__file__).with_name("report_diagrams.py"))
+    diagrams = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(diagrams)
+    markdown = diagrams.expand_diagrams(root, manifest, markdown)
+    validate_report(manifest, markdown)
     renderer = skill_dir("answer-me-with-html") / "scripts/am.mjs"
     if not renderer.is_file() or not shutil.which("node"):
         raise ValueError("answer-me-with-html and Node.js >=20 are required; run doctor")
     draft = root / "report.build.html"
+    # Pass the expanded text as a file inside RUN: a stdin draft with warnings is copied to the renderer's drafts/ folder.
+    source = root / "report.build.md"
+    source.write_bytes(markdown.encode("utf-8"))
     env = dict(os.environ, AM_NO_UPDATE_CHECK="1")
-    completed = subprocess.run([shutil.which("node"), str(renderer), "render", str(root / "report.md"),
-                                "-o", str(draft), "--no-open"], cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    try:
+        completed = subprocess.run([shutil.which("node"), str(renderer), "render", str(source),
+                                    "-o", str(draft), "--no-open"], cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    finally:
+        source.unlink(missing_ok=True)
     if completed.returncode or not draft.is_file():
         raise ValueError("renderer failed: " + completed.stdout + completed.stderr)
     html = draft.read_text(encoding="utf-8")

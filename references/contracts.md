@@ -19,6 +19,8 @@
 
 Cubox 来源使用 `provider: cubox`、`card_id`、`url`、`status: full_text|metadata_only|failed`。线程目标来自 Codex 原生工具的核验结果；目录路径不是 project ID。项目目标使用 `type: project`、`project_id`、`title`、`source_ids`，表示在该项目中新建会话，审核时必须明确显示“新建会话”。
 
+图解可选使用 `diagram-plan.json`，绑定节点、条件、停点、回放与文字证据。证据来自按 Traceink 读取范围保存的私有快照，来源用 `snapshot_file` 声明，文件位于 `RUN/sources/`；图计划中的字节哈希、JSON pointer 与原文摘录必须对应这些已登记文件。具体字段及语义审阅见 [图解合同](statechart-report.md)。
+
 每个报告二级标题使用 `## A1 标题` 等 answer-me-with-html 显式 panel ID；与 `panels` 一一对应。卡片上的 ID 是视频定位依据。页面焦点日志只有辅助意义，不可用 `meta.started_at` 直接减去墙钟来推断视频时间，因为选择窗口、倒计时、暂停及重录会改变时基。
 
 ## 理解与路由
