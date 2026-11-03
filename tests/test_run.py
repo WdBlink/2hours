@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import unittest
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,35 @@ spec.loader.exec_module(run)
 
 
 class RunTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "renderer requires Node.js")
+    def test_report_renders_chinese_labels_and_preserves_lists_and_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = ('---\ntitle: 工作线\ntemplate: doc\n---\n\n## A1 审计\n\n'
+                      '**工作线结论：**多轮只读审计确认第1步存在缺口。 [S1]\n\n'
+                      '**背景：**未读到可靠的先前判断。\n\n'
+                      '- **证据：**保留来源 [S1]\n- 普通列表\n\n'
+                      '`**代码：**保持原样`\n\n```text\n**代码：**保持原样\n```\n')
+            (root / 'report.md').write_text(report)
+            (root / 'manifest.json').write_text(json.dumps({'sources': [{'id': 'S1'}], 'panels': [{'id': 'A1', 'source_ids': ['S1']}]}))
+            (root / 'board.json').write_text(json.dumps({'title': '工作线', 'period_label': '昨日', 'review_label': '今天', 'coverage_label': '完整', 'cards': [{'id': 'A1', 'title': '审计', 'lane': 'decide'}]}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                run.render(SimpleNamespace(run=str(root)))
+            output = (root / 'report.html').read_text()
+            self.assertIn('<strong>工作线结论：</strong> 多轮只读审计', output)
+            self.assertIn('<strong>背景：</strong> 未读到', output)
+            self.assertIn('<li><strong>证据：</strong> 保留来源 [S1]</li>', output)
+            self.assertIn('<li>普通列表</li>', output)
+            self.assertIn('<code>**代码：**保持原样</code>', output)
+            self.assertEqual((root / 'report.md').read_text(), report)
+
+    def test_label_spacing_does_not_change_fenced_or_indented_code(self):
+        code = '```text\n**背景：**正文\n```\n    **背景：**正文\n'
+        self.assertEqual(run.normalize_label_spacing(code), code)
+        for code in ('- ```text\n  **字面量：**精确保留\n  ```\n', '`起点\n**字面量：**精确保留\n终点`\n'):
+            report = code + '\n**结论：**正文\n'
+            self.assertEqual(run.normalize_label_spacing(report), code + '\n**结论：** 正文\n')
+
     def test_bundled_skills_precede_global_install(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
