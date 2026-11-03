@@ -142,6 +142,37 @@ def validate_report(manifest, markdown):
         raise ValueError("file inclusion is disabled; quote only evidence already read")
 
 
+def normalize_label_spacing(markdown):
+    """Make bold paragraph and list labels parse when followed by CJK text."""
+    lines = []
+    fence_char, fence_length = None, 0
+    inline_ticks = 0
+    for line in markdown.splitlines(keepends=True):
+        fence = re.match(r"^ {0,3}(?:(?:[-+*]|\d+[.)]) +)?(`{3,}|~{3,})", line)
+        if fence:
+            marker = fence.group(1)
+            if fence_char is None:
+                fence_char, fence_length = marker[0], len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_length and not line[fence.end():].strip():
+                fence_char, fence_length = None, 0
+        elif fence_char is None:
+            if not line.strip():
+                inline_ticks = 0
+            if not inline_ticks:
+                line = re.sub(r"^( {0,3}(?:(?:[-+*]|\d+[.)])\s+)?\*\*[^*\n]+[：:]\*\*)(?=\S)", r"\1 ", line)
+            for ticks in re.finditer(r"(?<!`)(`+)(?!`)", line):
+                prefix = line[:ticks.start()]
+                if (len(prefix) - len(prefix.rstrip("\\"))) % 2:
+                    continue
+                length = len(ticks.group(1))
+                if not inline_ticks:
+                    inline_ticks = length
+                elif inline_ticks == length:
+                    inline_ticks = 0
+        lines.append(line)
+    return ''.join(lines)
+
+
 def render(args):
     root = Path(args.run).expanduser().resolve()
     if (root / "report.html").exists():
@@ -154,8 +185,8 @@ def render(args):
         raise ValueError("answer-me-with-html and Node.js >=20 are required; run doctor")
     draft = root / "report.build.html"
     env = dict(os.environ, AM_NO_UPDATE_CHECK="1")
-    completed = subprocess.run([shutil.which("node"), str(renderer), "render", str(root / "report.md"),
-                                "-o", str(draft), "--no-open"], cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    completed = subprocess.run([shutil.which("node"), str(renderer), "render", "-",
+                                "-o", str(draft), "--no-open"], input=normalize_label_spacing(markdown), cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     if completed.returncode or not draft.is_file():
         raise ValueError("renderer failed: " + completed.stdout + completed.stderr)
     html = draft.read_text(encoding="utf-8")
