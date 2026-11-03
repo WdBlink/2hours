@@ -127,7 +127,7 @@ node --test tests/agent_note_sync.test.mjs tests/work_review.test.mjs
 | 项目 | 锁定版本 / 提交 | 用途 |
 | --- | --- | --- |
 | [Blurt](https://github.com/AGIHunt/blurt) | 0.5.0 · `53171c4`；选择性吸收 1.0.2 · `9b4a0e1` | 录屏、口述转录与圈画证据 |
-| [agent-note-cli](https://github.com/WdBlink/agent-note-cli) | v0.6.0 后提交 · `74c1537`；原样源码与锁文件 | 会话梳理、工作线索引、深读、证据与恢复的代码上游 |
+| [agent-note-cli](https://github.com/WdBlink/agent-note-cli) | v0.6.0 后提交 · `bff2c48`；原样源码与锁文件 | 会话梳理、工作线索引、深读、证据与恢复的代码上游 |
 | [Cubox CLI](https://github.com/OLCUBO/cubox-cli) | 1.0.10 · `6eb4e7b` | 收藏与正文读取 |
 | [answer-me-with-html](https://github.com/QingYunA/answer-me-with-html) | 0.5.7 · `fa42f5c` | Markdown 排版与 HTML renderer |
 

@@ -1,6 +1,6 @@
 # agent-note-cli 处理流程源码
 
-会话处理代码复用自 [WdBlink/agent-note-cli](https://github.com/WdBlink/agent-note-cli)。当前锁定 v0.6.0 发布后的上游提交 `74c1537ba713a8e184c2e075dd1e413c59195d74`，不是新的发行 tag，源码位于 `vendor/agent-note/`。Two Hours 直接导入 `src/service.mjs` 的 `brief()`，使用同一套扫描、家族归属、摘要、工作线、深读、证据、缓存与恢复代码。运行不依赖全局 `agent-note` 命令。
+会话处理代码复用自 [WdBlink/agent-note-cli](https://github.com/WdBlink/agent-note-cli)。当前锁定 v0.6.0 发布后的上游提交 `bff2c488a385a96c21ea2bc5fa8a3d08fb2a5e77`，不是新的发行 tag，源码位于 `vendor/agent-note/`。Two Hours 直接导入 `src/service.mjs` 的 `brief()`，使用同一套扫描、家族归属、摘要、工作线、深读、证据、缓存与恢复代码。运行不依赖全局 `agent-note` 命令。
 
 ## 代码边界与构建
 
