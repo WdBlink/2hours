@@ -22,10 +22,15 @@ jobs:
           python -m pip install -r requirements-windows.txt
           choco install ffmpeg --no-progress -y
           npm.cmd ci --prefix vendor/answer-me-with-html/source
+          npm.cmd ci --prefix vendor/agent-note
+          node scripts/work_review.mjs --build
       - name: Python tests
         run: python -B -m unittest discover -s tests -v
       - name: JavaScript checks
         run: |
           node --check assets/bridge.js
           node --check assets/board.js
-          node --test vendor/traceink/test/*.test.mjs
+          node --test tests/agent_note_sync.test.mjs tests/work_review.test.mjs tests/workflow_lineage.test.mjs
+          Push-Location vendor/agent-note
+          node --import tsx --test backend/upstream/tests/*.test.ts
+          Pop-Location
