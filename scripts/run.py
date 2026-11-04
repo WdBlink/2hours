@@ -167,9 +167,15 @@ def render(args):
     if not renderer.is_file() or not shutil.which("node"):
         raise ValueError("answer-me-with-html and Node.js >=20 are required; run doctor")
     draft = root / "report.build.html"
+    # Pass the normalized text as a file inside RUN: a stdin draft with warnings is copied to the renderer's drafts/ folder.
+    source = root / "report.build.md"
+    source.write_bytes(normalize_label_spacing(markdown).encode("utf-8"))
     env = dict(os.environ, AM_NO_UPDATE_CHECK="1")
-    completed = subprocess.run([shutil.which("node"), str(renderer), "render", "-",
-                                "-o", str(draft), "--no-open"], input=normalize_label_spacing(markdown), cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    try:
+        completed = subprocess.run([shutil.which("node"), str(renderer), "render", str(source),
+                                    "-o", str(draft), "--no-open"], cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    finally:
+        source.unlink(missing_ok=True)
     if completed.returncode or not draft.is_file():
         raise ValueError("renderer failed: " + completed.stdout + completed.stderr)
     html = draft.read_text(encoding="utf-8")

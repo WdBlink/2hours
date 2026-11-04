@@ -39,6 +39,24 @@ class RunTests(unittest.TestCase):
             self.assertIn('<code>**代码：**保持原样</code>', output)
             self.assertEqual((root / 'report.md').read_text(), report)
 
+    @unittest.skipUnless(shutil.which("node"), "renderer requires Node.js")
+    def test_render_keeps_draft_copies_inside_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, home = Path(directory) / 'run', Path(directory) / 'am-home'
+            root.mkdir()
+            report = ('---\ntitle: 工作线\ntemplate: doc\n---\n\n## A1 审计\n\n**背景：**正文 [S1]\n\n'
+                      '```diff\n@@ -1,1 +1,1 @@\n+a\n+b\n```\n')
+            (root / 'report.md').write_text(report, encoding='utf-8')
+            (root / 'manifest.json').write_text(json.dumps({'sources': [{'id': 'S1'}], 'panels': [{'id': 'A1', 'source_ids': ['S1']}]}))
+            stdout = io.StringIO()
+            with patch.dict(os.environ, {'AM_HOME': str(home)}), contextlib.redirect_stdout(stdout):
+                run.render(SimpleNamespace(run=str(root)))
+            self.assertIn('diff-counts', stdout.getvalue())
+            self.assertNotIn('draft:', stdout.getvalue())
+            self.assertFalse((home / 'drafts').exists())
+            self.assertEqual(sorted(p.name for p in root.iterdir()), ['manifest.json', 'report.html', 'report.md'])
+            self.assertIn('<strong>背景：</strong> 正文', (root / 'report.html').read_text(encoding='utf-8'))
+
     def test_label_spacing_does_not_change_fenced_or_indented_code(self):
         code = '```text\n**背景：**正文\n```\n    **背景：**正文\n'
         self.assertEqual(run.normalize_label_spacing(code), code)
