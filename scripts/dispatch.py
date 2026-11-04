@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import uuid
 import stat
 import importlib.util
 
@@ -664,20 +665,30 @@ def claim(run, batch_id):
         if batch_id in state["batches"]:
             raise DispatchError("Batch already claimed; inspect its receipt or verify the destination before any retry")
         target = batch["target"]
+        attempt_id = uuid.uuid4().hex
+        tasks = {task["id"]: {"uid": hashlib.sha256(encoded([plan["plan_id"], batch_id, task["id"]])).hexdigest(),
+                              "state": "handed_off", "revision": 0, "work": None, "work_history": [], "reports": {}}
+                 for task in batch["tasks"]}
+        instructions = {"plan_id": plan["plan_id"], "batch_id": batch_id, "attempt_id": attempt_id,
+                        "tasks": [{"task_id": key, "uid": value["uid"]} for key, value in tasks.items()]}
+        prompt = (batch["prompt"] + "\n\n逐项回报：在最终回复中提供一个 JSON 数组，每项包含以下对应标识，"
+                  "每项展开 plan_id、batch_id、attempt_id、task_id、uid，另附唯一 report_id、expected_revision（首次为 0）、state（fixing、fixed、wontfix 或 reopened）、note，"
+                  "可选 agent、commit、pr。fixed 或 wontfix 是待用户验收的声明。"
+                  "不要声称任务已由用户验收。标识：\n" + json.dumps(instructions, ensure_ascii=False))
         if target["type"] == "thread":
             tool = "send_message_to_thread"
-            args = {"threadId": target["thread_id"], "prompt": batch["prompt"]}
+            args = {"threadId": target["thread_id"], "prompt": prompt}
             if target.get("host_id"):
                 args["hostId"] = target["host_id"]
         else:
             tool = "create_thread"
             args = {
                 "target": {"type": "project", "projectId": target["project_id"], "environment": {"type": "local"}},
-                "prompt": batch["prompt"],
+                "prompt": prompt,
             }
-        state["batches"][batch_id] = {"status": "sending", "claimed_at": now()}
+        state["batches"][batch_id] = {"status": "sending", "claimed_at": now(), "attempt_id": attempt_id, "tasks": tasks}
         write_json(run / "dispatch-state.json", state)
-        return {"plan_id": plan["plan_id"], "batch_id": batch_id, "status": "sending", "tool": tool, "args": args}
+        return {"plan_id": plan["plan_id"], "batch_id": batch_id, "attempt_id": attempt_id, "status": "sending", "tool": tool, "args": args}
 
 
 def response_has_error(response):
@@ -717,6 +728,99 @@ def receipt(run, batch_id, response_path, outcome):
         return {"plan_id": plan["plan_id"], "batch_id": batch_id, **attempt}
 
 
+# The states and claim mapping follow Blurt v1.0.12 items.py and mcp_server.py.
+# Two Hours binds them to its immutable dispatch plan and a single claimed attempt.
+MARK_STATES = {"fixing": ("in_progress", None), "fixed": ("to_verify", "fixed"),
+               "wontfix": ("to_verify", "wontfix"), "reopened": ("todo", None)}
+
+
+def work_report(run, report, source_thread, source_host="local"):
+    text_field(source_thread, "source thread")
+    text_field(source_host, "source host")
+    if not isinstance(report, dict):
+        raise DispatchError("Work report must be an object")
+    required = ("plan_id", "batch_id", "attempt_id", "task_id", "uid", "report_id", "state", "note")
+    for key in required:
+        text_field(report.get(key), "report." + key)
+    allowed = set(required) | {"expected_revision", "agent", "commit", "pr"}
+    if type(report.get("expected_revision")) is not int or report["expected_revision"] < 0:
+        raise DispatchError("Work report expected_revision must be a nonnegative integer")
+    if set(report) - allowed:
+        raise DispatchError("Unknown work report fields")
+    for key in ("agent", "commit", "pr"):
+        if key in report:
+            text_field(report[key], "report." + key, optional=True)
+    if report["state"] not in MARK_STATES:
+        raise DispatchError("Invalid work report state")
+    with locked(run):
+        plan = read_plan(run)
+        state = state_for(run, plan)
+        if report["plan_id"] != plan["plan_id"]:
+            raise DispatchError("Work report plan does not match")
+        attempt = state["batches"].get(report["batch_id"])
+        if not attempt or attempt.get("attempt_id") != report["attempt_id"]:
+            raise DispatchError("Work report attempt does not match")
+        batch = next((batch for batch in plan["batches"] if batch["id"] == report["batch_id"]), None)
+        if not batch:
+            raise DispatchError("Work report batch does not match")
+        target = batch["target"]
+        expected_thread = (target.get("thread_id") if target["type"] == "thread" else
+                           (attempt.get("response") or {}).get("threadId") if attempt.get("status") == "sent" else None)
+        expected_host = target.get("host_id", "local") if target["type"] == "thread" else "local"
+        if (not isinstance(expected_thread, str) or not expected_thread or expected_thread != source_thread
+                or source_host != expected_host):
+            raise DispatchError("Work report source thread cannot be matched to the destination")
+        item = attempt.get("tasks", {}).get(report["task_id"])
+        if not item or item.get("uid") != report["uid"]:
+            raise DispatchError("Work report task does not match")
+        reports = item["reports"]
+        if report["report_id"] in reports:
+            if reports[report["report_id"]] != {"report": report, "source_thread": source_thread, "source_host": source_host}:
+                raise DispatchError("Work report ID already used with different content")
+            return item
+        if item["revision"] != report["expected_revision"]:
+            raise DispatchError("Work report revision is stale")
+        if item["state"] in ("done", "wontfix"):
+            raise DispatchError("User decision is final; start a new run for further work")
+        if item["state"] == "to_verify" and report["state"] != "reopened":
+            raise DispatchError("Withdraw the previous claim before reporting more work")
+        target, claim = MARK_STATES[report["state"]]
+        if item["work"]:
+            item["work_history"].append({"state": item["state"], **item["work"]})
+        item["state"] = target
+        item["revision"] += 1
+        item["work"] = {"to": "session", "agent": report.get("agent"), "job": report["attempt_id"],
+                        "handoff": report["batch_id"], "claim": claim, "note": report["note"],
+                        "commit": report.get("commit"), "pr": report.get("pr"), "source_thread": source_thread, "source_host": source_host,
+                        "at": now(), "by": "agent"}
+        reports[report["report_id"]] = {"report": report, "source_thread": source_thread, "source_host": source_host}
+        write_json(run / "dispatch-state.json", state)
+        return item
+
+
+def verify_work(run, batch_id, task_id, attempt_id, revision, decision, note):
+    if decision not in ("done", "wontfix", "todo"):
+        raise DispatchError("Invalid user decision")
+    text_field(note, "verification note")
+    with locked(run):
+        plan = read_plan(run)
+        state = state_for(run, plan)
+        attempt = state["batches"].get(batch_id)
+        if not attempt or attempt.get("attempt_id") != attempt_id:
+            raise DispatchError("Verification attempt does not match")
+        item = attempt.get("tasks", {}).get(task_id)
+        if not item or item["state"] != "to_verify":
+            raise DispatchError("Only a task awaiting verification can be decided")
+        if item["revision"] != revision:
+            raise DispatchError("Verification revision is stale")
+        item["work_history"].append({"state": item["state"], **item["work"]})
+        item["state"] = decision
+        item["revision"] += 1
+        item["work"] = {"by": "user", "at": now(), "note": note, "job": attempt_id}
+        write_json(run / "dispatch-state.json", state)
+        return item
+
+
 def status(run):
     with locked(run):
         plan = read_plan(run)
@@ -736,21 +840,67 @@ def status(run):
         }
 
 
+def ledger(runs):
+    if not runs.is_dir():
+        raise DispatchError("Runs directory does not exist")
+    entries, errors = [], []
+    for run in sorted(runs.iterdir()):
+        if not run.is_dir() or is_link(run) or not (run / "dispatch-state.json").exists():
+            continue
+        try:
+            with locked(run):
+                plan = read_plan(run)
+                state = state_for(run, plan)
+                for batch in plan["batches"]:
+                    attempt = state["batches"].get(batch["id"])
+                    if not attempt:
+                        continue
+                    if "tasks" not in attempt:
+                        entries.append({"run": str(run), "plan_id": plan["plan_id"], "batch_id": batch["id"],
+                                        "delivery": attempt.get("status"), "tracking": "legacy_unavailable"})
+                        continue
+                    for task in batch["tasks"]:
+                        item = attempt["tasks"][task["id"]]
+                        if item["state"] not in ("done", "wontfix"):
+                            entries.append({"run": str(run), "plan_id": plan["plan_id"], "batch_id": batch["id"],
+                                            "attempt_id": attempt["attempt_id"], "target": batch["target"],
+                                            "task_id": task["id"], "objective": task["objective"],
+                                            "delivery": attempt["status"], "uid": item["uid"],
+                                            "state": item["state"], "revision": item["revision"], "work": item["work"]})
+        except (DispatchError, OSError, KeyError, TypeError) as exc:
+            errors.append({"run": str(run), "error": str(exc)})
+    return {"items": entries, "errors": errors}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("prepare", "prepare-review", "prepare-auto", "claim", "receipt", "status"):
+    for command in ("prepare", "prepare-review", "prepare-auto", "claim", "receipt", "status", "work-report", "work-verify"):
         sub = subparsers.add_parser(command)
         sub.add_argument("--run", required=True, type=Path)
-        if command in ("claim", "receipt"):
+        if command in ("claim", "receipt", "work-verify"):
             sub.add_argument("--batch", required=True)
+        if command == "work-report":
+            sub.add_argument("--report", required=True, type=Path)
+            sub.add_argument("--source-thread", required=True)
+            sub.add_argument("--source-host", default="local")
+        if command == "work-verify":
+            sub.add_argument("--task", required=True)
+            sub.add_argument("--attempt", required=True)
+            sub.add_argument("--revision", required=True, type=int)
+            sub.add_argument("--decision", required=True, choices=("done", "wontfix", "todo"))
+            sub.add_argument("--note", required=True)
         if command == "receipt":
             sub.add_argument("--response", required=True, type=Path)
             sub.add_argument("--outcome", required=True, choices=("sent", "failed"))
+    listing = subparsers.add_parser("ledger")
+    listing.add_argument("--runs", type=Path, default=Path.home() / ".2hours/runs")
     args = parser.parse_args()
-    run = args.run.expanduser().resolve()
+    run = args.run.expanduser().resolve() if args.command != "ledger" else None
     try:
-        if args.command == "prepare-review":
+        if args.command == "ledger":
+            result = ledger(args.runs.expanduser().resolve())
+        elif args.command == "prepare-review":
             result = prepare_review(run)
         elif args.command == "prepare":
             result = prepare(run)
@@ -760,6 +910,10 @@ def main():
             result = claim(run, args.batch)
         elif args.command == "receipt":
             result = receipt(run, args.batch, args.response, args.outcome)
+        elif args.command == "work-report":
+            result = work_report(run, read_json(args.report), args.source_thread, args.source_host)
+        elif args.command == "work-verify":
+            result = verify_work(run, args.batch, args.task, args.attempt, args.revision, args.decision, args.note)
         else:
             result = status(run)
     except (DispatchError, OSError) as exc:
