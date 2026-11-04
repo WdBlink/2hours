@@ -1,0 +1,18 @@
+{
+  "title": "图解合成演练",
+  "period_label": "虚构演练",
+  "review_label": "不是实际工作成果",
+  "coverage_label": "两张卡，仅一张需要图",
+  "cards": [
+    {
+      "id": "A1",
+      "title": "A1",
+      "lane": "follow"
+    },
+    {
+      "id": "A2",
+      "title": "A2",
+      "lane": "follow"
+    }
+  ]
+}

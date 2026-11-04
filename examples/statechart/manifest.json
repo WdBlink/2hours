@@ -1,0 +1,1 @@
+{"sources": [{"id": "S1", "snapshot_file": "sources/facts.json"}], "panels": [{"id": "A1", "source_ids": ["S1"]}, {"id": "A2", "source_ids": ["S1"]}]}
