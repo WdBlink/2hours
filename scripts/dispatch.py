@@ -750,7 +750,7 @@ def receipt(run, batch_id, response_path, outcome):
 
 
 # The states, move tables and claim mapping follow Blurt v1.0.12 _common.py:749-784,
-# items.py:803-860 and mcp_server.py:273-301 (references/blurt-task-ledger.SOURCE.json).
+# items.py:803-860 and mcp_server.py:275-295 (references/blurt-task-ledger.SOURCE.json).
 # Two Hours binds them to its immutable dispatch plan and a single claimed attempt;
 # tests/test_work_lifecycle.py checks them against the upstream lifecycle.json.
 WORK_STATES = ("todo", "handed_off", "in_progress", "to_verify", "done", "wontfix")
@@ -807,8 +807,6 @@ def work_report(run, report, source_thread, source_host="local"):
         attempt = state["batches"].get(report["batch_id"])
         if not attempt or attempt.get("attempt_id") != report["attempt_id"]:
             raise DispatchError("Work report attempt does not match")
-        if attempt.get("status") == "failed":
-            raise DispatchError("Work report rejected: delivery failed for this attempt")
         batch = next((batch for batch in plan["batches"] if batch["id"] == report["batch_id"]), None)
         if not batch:
             raise DispatchError("Work report batch does not match")
@@ -826,7 +824,9 @@ def work_report(run, report, source_thread, source_host="local"):
         if report["report_id"] in reports:
             if reports[report["report_id"]] != {"report": report, "source_thread": source_thread, "source_host": source_host}:
                 raise DispatchError("Work report ID already used with different content")
-            return item
+            return item  # an accepted report sent again gets the earlier result, even after delivery failed
+        if attempt.get("status") == "failed":
+            raise DispatchError("Work report rejected: delivery failed for this attempt")
         if item["revision"] != report["expected_revision"]:
             raise DispatchError("Work report revision is stale")
         if item["state"] in ("done", "wontfix"):
@@ -846,6 +846,11 @@ def work_report(run, report, source_thread, source_host="local"):
         else:
             if item["work"]:
                 item["work_history"].append(history_entry(item))
+            # upstream set_state (items.py:844-852): carry agent, and commit/pr unless starting work again,
+            # from a handed_off, in_progress or to_verify record; nothing carries into todo
+            if item["work"] and item["state"] in ("handed_off", "in_progress", "to_verify") and target != "todo":
+                carried = ("agent",) if target == "in_progress" else ("agent", "commit", "pr")
+                fresh.update({key: item["work"].get(key) for key in carried if fresh[key] is None})
             item["state"] = target
         item["revision"] += 1
         item["work"] = fresh
