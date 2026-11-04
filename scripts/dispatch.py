@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 import uuid
 import stat
 import importlib.util
@@ -29,6 +30,10 @@ INPUTS = ("manifest.json", "report.html", "routes.json")
 ITEM_INPUTS = ("blurt/items.json", "written-items.json")
 CONFIRMATION = "review-confirmation.json"
 AUTHORIZATIONS = "input-authorizations.json"
+# Windows refuses os.replace while a reader has the target open; Blurt v1.0.12
+# write_text_atomic retries 20 x 50 ms (skills/blurt/scripts/_common.py:577-590).
+REPLACE_ATTEMPTS = 20
+REPLACE_DELAY_SECONDS = 0.05
 SETTINGS_HOME = Path.home() / ".2hours"
 
 
@@ -67,7 +72,14 @@ def write_json(path, value):
             stream.write(encoded(value) + b"\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp, path)
+        for attempt in range(REPLACE_ATTEMPTS):
+            try:
+                os.replace(temp, path)
+                break
+            except PermissionError:
+                if attempt == REPLACE_ATTEMPTS - 1:
+                    raise  # the finally clause removes the temporary file
+                time.sleep(REPLACE_DELAY_SECONDS)
         if os.name == "nt":
             return  # Windows cannot open directories for fsync; the file was flushed above.
         directory = os.open(path.parent, os.O_RDONLY)
@@ -666,8 +678,16 @@ def claim(run, batch_id):
             raise DispatchError("Batch already claimed; inspect its receipt or verify the destination before any retry")
         target = batch["target"]
         attempt_id = uuid.uuid4().hex
+        if plan.get("authorization_mode") == "automatic":
+            authorization = {"mode": "automatic", "opt_in_id": plan["opt_in_id"]}
+        else:
+            approval = (run / "approval.json").read_bytes()
+            authorization = {"mode": "manual", "approved_at": json.loads(approval)["approved_at"],
+                             "approval_sha256": hashlib.sha256(approval).hexdigest()}
+        claimed_at = now()
+        handoff = work_record(to="session", job=attempt_id, handoff=batch_id, at=claimed_at, by="app")
         tasks = {task["id"]: {"uid": hashlib.sha256(encoded([plan["plan_id"], batch_id, task["id"]])).hexdigest(),
-                              "state": "handed_off", "revision": 0, "work": None, "work_history": [], "reports": {}}
+                              "state": CLAIM_MOVE[1], "revision": 0, "work": dict(handoff), "work_history": [], "reports": {}}
                  for task in batch["tasks"]}
         instructions = {"plan_id": plan["plan_id"], "batch_id": batch_id, "attempt_id": attempt_id,
                         "tasks": [{"task_id": key, "uid": value["uid"]} for key, value in tasks.items()]}
@@ -686,7 +706,8 @@ def claim(run, batch_id):
                 "target": {"type": "project", "projectId": target["project_id"], "environment": {"type": "local"}},
                 "prompt": prompt,
             }
-        state["batches"][batch_id] = {"status": "sending", "claimed_at": now(), "attempt_id": attempt_id, "tasks": tasks}
+        state["batches"][batch_id] = {"status": "sending", "claimed_at": claimed_at, "attempt_id": attempt_id,
+                                      "authorization": authorization, "tasks": tasks}
         write_json(run / "dispatch-state.json", state)
         return {"plan_id": plan["plan_id"], "batch_id": batch_id, "attempt_id": attempt_id, "status": "sending", "tool": tool, "args": args}
 
@@ -728,10 +749,36 @@ def receipt(run, batch_id, response_path, outcome):
         return {"plan_id": plan["plan_id"], "batch_id": batch_id, **attempt}
 
 
-# The states and claim mapping follow Blurt v1.0.12 items.py and mcp_server.py.
-# Two Hours binds them to its immutable dispatch plan and a single claimed attempt.
+# The states, move tables and claim mapping follow Blurt v1.0.12 _common.py:749-784,
+# items.py:803-860 and mcp_server.py:275-295 (references/blurt-task-ledger.SOURCE.json).
+# Two Hours binds them to its immutable dispatch plan and a single claimed attempt;
+# tests/test_work_lifecycle.py checks them against the upstream lifecycle.json.
+WORK_STATES = ("todo", "handed_off", "in_progress", "to_verify", "done", "wontfix")
 MARK_STATES = {"fixing": ("in_progress", None), "fixed": ("to_verify", "fixed"),
                "wontfix": ("to_verify", "wontfix"), "reopened": ("todo", None)}
+# claim: an approved task is handed off by the app (upstream app move todo -> handed_off)
+CLAIM_MOVE = ("todo", "handed_off")
+# Upstream agent moves without new (Two Hours has no inbox state) and without
+# to_verify -> in_progress/to_verify (a pending claim must be withdrawn first).
+AGENT_MOVES = frozenset({
+    ("todo", "in_progress"), ("handed_off", "in_progress"), ("in_progress", "in_progress"),
+    ("todo", "to_verify"), ("handed_off", "to_verify"), ("in_progress", "to_verify"),
+    ("in_progress", "todo"), ("to_verify", "todo"),
+})
+USER_DECISIONS = frozenset({("to_verify", "done"), ("to_verify", "wontfix"), ("to_verify", "todo")})
+# upstream WORK_KEYS (_common.py:754) plus where the report was read from
+WORK_KEYS = ("to", "agent", "job", "handoff", "claim", "note", "commit", "pr", "at", "by", "source_thread", "source_host")
+
+
+def work_record(**values):
+    unknown = set(values) - set(WORK_KEYS)
+    if unknown:
+        raise DispatchError("Unknown work fields: " + ", ".join(sorted(unknown)))
+    return {key: values.get(key) for key in WORK_KEYS}
+
+
+def history_entry(item):
+    return {"state": item["state"], **work_record(**item["work"])}
 
 
 def work_report(run, report, source_thread, source_host="local"):
@@ -777,7 +824,9 @@ def work_report(run, report, source_thread, source_host="local"):
         if report["report_id"] in reports:
             if reports[report["report_id"]] != {"report": report, "source_thread": source_thread, "source_host": source_host}:
                 raise DispatchError("Work report ID already used with different content")
-            return item
+            return item  # an accepted report sent again gets the earlier result, even after delivery failed
+        if attempt.get("status") == "failed":
+            raise DispatchError("Work report rejected: delivery failed for this attempt")
         if item["revision"] != report["expected_revision"]:
             raise DispatchError("Work report revision is stale")
         if item["state"] in ("done", "wontfix"):
@@ -785,14 +834,26 @@ def work_report(run, report, source_thread, source_host="local"):
         if item["state"] == "to_verify" and report["state"] != "reopened":
             raise DispatchError("Withdraw the previous claim before reporting more work")
         target, claim = MARK_STATES[report["state"]]
-        if item["work"]:
-            item["work_history"].append({"state": item["state"], **item["work"]})
-        item["state"] = target
+        if (item["state"], target) not in AGENT_MOVES:
+            raise DispatchError(f"Work report cannot move {item['state']} -> {target}")
+        fresh = work_record(to="session", agent=report.get("agent"), job=report["attempt_id"],
+                            handoff=report["batch_id"], claim=claim, note=report["note"],
+                            commit=report.get("commit"), pr=report.get("pr"), source_thread=source_thread,
+                            source_host=source_host, at=now(), by="agent")
+        if item["state"] == target and item["work"]:
+            # same state again: update the record in place, as upstream set_state does
+            fresh = {**work_record(**item["work"]), **{k: v for k, v in fresh.items() if v is not None}}
+        else:
+            if item["work"]:
+                item["work_history"].append(history_entry(item))
+            # upstream set_state (items.py:844-852): carry agent, and commit/pr unless starting work again,
+            # from a handed_off, in_progress or to_verify record; nothing carries into todo
+            if item["work"] and item["state"] in ("handed_off", "in_progress", "to_verify") and target != "todo":
+                carried = ("agent",) if target == "in_progress" else ("agent", "commit", "pr")
+                fresh.update({key: item["work"].get(key) for key in carried if fresh[key] is None})
+            item["state"] = target
         item["revision"] += 1
-        item["work"] = {"to": "session", "agent": report.get("agent"), "job": report["attempt_id"],
-                        "handoff": report["batch_id"], "claim": claim, "note": report["note"],
-                        "commit": report.get("commit"), "pr": report.get("pr"), "source_thread": source_thread, "source_host": source_host,
-                        "at": now(), "by": "agent"}
+        item["work"] = fresh
         reports[report["report_id"]] = {"report": report, "source_thread": source_thread, "source_host": source_host}
         write_json(run / "dispatch-state.json", state)
         return item
@@ -813,10 +874,16 @@ def verify_work(run, batch_id, task_id, attempt_id, revision, decision, note):
             raise DispatchError("Only a task awaiting verification can be decided")
         if item["revision"] != revision:
             raise DispatchError("Verification revision is stale")
-        item["work_history"].append({"state": item["state"], **item["work"]})
+        if ("to_verify", decision) not in USER_DECISIONS:
+            raise DispatchError("Invalid user decision")
+        previous = work_record(**item["work"])
+        item["work_history"].append(history_entry(item))
         item["state"] = decision
         item["revision"] += 1
-        item["work"] = {"by": "user", "at": now(), "note": note, "job": attempt_id}
+        keep = decision != "todo"  # todo sends the task back; the claimed commit and PR do not carry over
+        item["work"] = work_record(to=previous["to"], agent=previous["agent"], job=attempt_id, handoff=batch_id,
+                                   note=note, commit=previous["commit"] if keep else None,
+                                   pr=previous["pr"] if keep else None, at=now(), by="user")
         write_json(run / "dispatch-state.json", state)
         return item
 

@@ -1,0 +1,116 @@
+{
+  "official_url": "https://github.com/AGIHunt/blurt",
+  "version": "1.0.12",
+  "upstream_commit": "b9052e5f30e3a357fdc29f7d6ec56d44b428d60c",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 blurt contributors",
+  "license_text": "vendor/blurt/LICENSE (unchanged upstream root LICENSE)",
+  "verified_on": "2026-11-04",
+  "sources": [
+    {
+      "path": "skills/blurt/scripts/_common.py",
+      "lines": "749-784, 830-834",
+      "used_for": "work states, agent/app/user move tables, FIX_TO_WORK (mark_fixed) mapping and WORK_KEYS"
+    },
+    {
+      "path": "skills/blurt/scripts/_common.py",
+      "lines": "577-590",
+      "used_for": "PermissionError retry of os.replace (20 attempts, 50 ms)"
+    },
+    {
+      "path": "skills/blurt/scripts/items.py",
+      "lines": "803-860",
+      "used_for": "set_state work/work_history rules, same-state update without history, claim cleared outside to_verify"
+    },
+    {
+      "path": "skills/blurt/scripts/mcp_server.py",
+      "lines": "275-295",
+      "used_for": "mark_fixed report states"
+    },
+    {
+      "path": "skills/blurt/reference/schema.md",
+      "lines": "81-100",
+      "used_for": "state and by semantics"
+    },
+    {
+      "path": "tests/fixtures/lifecycle.json",
+      "copied_to": "tests/fixtures/blurt_lifecycle.json",
+      "sha256": "8a1dbe9e887be9eef76c2f9642156b320a80d85488401af9afa1b042376e17a1",
+      "modified": false
+    }
+  ],
+  "adaptation": "Rules are re-implemented in scripts/dispatch.py on immutable Two Hours plans and dispatch attempts; no Blurt store, MCP server, jobs or session runner is imported.",
+  "selected_changes": [
+    "PR #18 (codex/blurt-task-receipts 56b53f3): mark_fixed state mapping, per-task UID, attempt ID, revision, work and work_history in dispatch-state.json; work-report, work-verify and ledger commands.",
+    "Explicit AGENT_MOVES / USER_DECISIONS / CLAIM_MOVE tables in scripts/dispatch.py, tested against the upstream lifecycle.json.",
+    "write_json retries os.replace only on PermissionError, 20 x 50 ms, then removes its temporary file.",
+    "work and every new work_history entry hold the 10 upstream WORK_KEYS plus source_thread and source_host.",
+    "A repeated report of the same state updates work in place without a history entry.",
+    "An accepted report_id sent again returns the earlier result before the failed-delivery check.",
+    "A report moving to a new state carries agent, and commit/pr unless the target is in_progress, from handed_off, in_progress or to_verify work, as upstream set_state does (items.py:844-852)."
+  ],
+  "local_modifications": {
+    "scripts/dispatch.py": "Claim records by=app and the attempt authorization (manual: approval approved_at and approval_sha256; automatic: opt_in_id). Reports are rejected when delivery failed and accepted while it is sending. fsync and the run lock are kept; upstream write_text_atomic has neither. A report_id already accepted is answered from the stored result before the failed-delivery check (upstream has no report IDs or delivery states). verify todo keeps to/agent and records the attempt and batch (see differences).",
+    "tests/test_work_lifecycle.py": "Two Hours tests; the deliberate differences from lifecycle.json are listed there with reasons. VERIFY_TODO_DIFFERENCES lists the verify todo fields that differ from upstream and is checked against this file.",
+    "tests/test_write_json_retry.py": "Two Hours tests, including Windows-only tests with a reader holding the target open."
+  },
+  "differences": [
+    {
+      "upstream_agent_moves": [
+        [
+          "new",
+          "in_progress"
+        ],
+        [
+          "new",
+          "to_verify"
+        ]
+      ],
+      "reason": "Two Hours has no new state; a task enters at handed_off when its approved batch is claimed."
+    },
+    {
+      "upstream_agent_moves": [
+        [
+          "to_verify",
+          "in_progress"
+        ],
+        [
+          "to_verify",
+          "to_verify"
+        ]
+      ],
+      "reason": "A claim awaiting the user must be withdrawn with reopened before more work is reported."
+    },
+    {
+      "by": "Claim is recorded as app in both authorization modes; reports as agent; work-verify as user.",
+      "reason": "Upstream does not let an agent move an item to handed_off; the user does not decide each task in automatic mode."
+    },
+    {
+      "verify_todo_fields": {
+        "to": {
+          "upstream": null,
+          "two_hours": "session"
+        },
+        "agent": {
+          "upstream": "human",
+          "two_hours": "previous agent"
+        },
+        "job": {
+          "upstream": null,
+          "two_hours": "attempt_id"
+        },
+        "handoff": {
+          "upstream": null,
+          "two_hours": "batch_id"
+        }
+      },
+      "same_as_upstream": "claim, commit and pr are cleared; by is user; the previous work goes to work_history.",
+      "reason": "When the user sends a task back (to_verify -> todo), Two Hours keeps it bound to the session and attempt that receive the follow-up, and keeps the agent whose claim was rejected; upstream set_state carries nothing into todo (items.py:844-852)."
+    },
+    {
+      "old_runs": "Run files written before this change are read as they are: claim work may be null, verified work may have 4 keys and the attempt has no authorization. They are not migrated.",
+      "reason": "Run files are local per-run records; rewriting them would change already-recorded history."
+    }
+  ],
+  "not_imported": "Blurt store, project index, ULID item UIDs (PR #18 uses a recomputable sha256 of plan, batch and task IDs), MCP server, jobs, session runner, new/discarded states and user actions other than done/wontfix/todo on to_verify."
+}

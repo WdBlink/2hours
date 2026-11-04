@@ -123,6 +123,6 @@ node --test vendor/traceink/test/*.test.mjs
 | [Cubox CLI](https://github.com/OLCUBO/cubox-cli) | 1.0.10 · `6eb4e7b` | 收藏与正文读取 |
 | [answer-me-with-html](https://github.com/QingYunA/answer-me-with-html) | 0.5.7 · `fa42f5c` | Markdown 排版与 HTML renderer |
 
-四者均按原 MIT 许可集成，各自目录保留完整许可证和 `SOURCE.json`。Blurt 包含 Two Hours 身份与启动方式的本地适配；Traceink 包含本地修订的阅读合同；AM 包含可重建源码、锁文件、renderer bundle 及字体/内嵌依赖许可。报告内容组织也参考了 [ctx-report](https://github.com/motiful/ctx) 的自足上下文思路，不要求配置 CTX。原有版权和许可声明保留。
+四者均按原 MIT 许可集成，各自目录保留完整许可证和 `SOURCE.json`。Blurt 包含 Two Hours 身份与启动方式的本地适配；按 Blurt 1.0.12 改写的任务状态合同不在 vendor 目录内，出处见 `references/blurt-task-ledger.SOURCE.json`；Traceink 包含本地修订的阅读合同；AM 包含可重建源码、锁文件、renderer bundle 及字体/内嵌依赖许可。报告内容组织也参考了 [ctx-report](https://github.com/motiful/ctx) 的自足上下文思路，不要求配置 CTX。原有版权和许可声明保留。
 
 Two Hours 自有代码自 v0.2.1 起按 [MIT License](LICENSE) 开源；上述第三方组件继续分别适用其原许可证和版权声明。

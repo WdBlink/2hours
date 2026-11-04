@@ -61,16 +61,5 @@
       "Use four-second movie fragments and disable video frame reordering, as in the upstream macOS recorder, to improve recoverability after interrupted writing."
     ],
     "not_imported": "The 1.0.2 multi-module application, live/snap/ink flows, segmented writer recovery and standalone review require new protocols and dependencies; they do not replace the existing Two Hours capture and unified review integration."
-  },
-  "upstream_task_receipts": {
-    "version": "1.0.12",
-    "commit": "b9052e5f30e3a357fdc29f7d6ec56d44b428d60c",
-    "license": "MIT, Copyright (c) 2026 blurt contributors",
-    "files": [
-      "skills/blurt/scripts/mcp_server.py",
-      "skills/blurt/scripts/items.py",
-      "skills/blurt/reference/schema.md"
-    ],
-    "adaptation": "scripts/dispatch.py ports mark_fixed state mapping and adapts work/work_history to immutable Two Hours plans and dispatch attempts; it does not use the Blurt project store, MCP server, jobs or runner."
   }
 }

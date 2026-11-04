@@ -4,7 +4,8 @@ import subprocess
 import sys
 import unittest
 
-import test_dispatch as fixture
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import test_dispatch as fixture  # noqa: E402
 
 dispatch = fixture.dispatch
 SCRIPT = fixture.SCRIPT

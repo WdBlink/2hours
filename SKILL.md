@@ -143,7 +143,7 @@ python3 SKILL/scripts/dispatch.py work-report --run RUN --report REPORT_FILE --s
 python3 SKILL/scripts/dispatch.py status --run RUN
 ```
 
-回报必须保留 plan_id、batch_id、attempt_id、task_id、uid、expected_revision 和唯一 report_id；同一 report_id 的相同内容可安全重试，冲突内容拒绝；后续回报须读取当前 revision 并作为 expected_revision，过期回报不能覆盖新状态。目标不是本机时用 `--source-host HOST_ID` 匹配真实来源。`fixed` 与 `wontfix` 只进入 `to_verify`，并保留说明和可选的 commit、PR。标识校验不能证明回报确实来自目标会话；须核对真实来源，不凭其他材料冒充回报。新建会话须有 sent 回执，实际 ID 须从真实工具响应的顶层 threadId 核对；该字段缺失时无法导入，保留原始回报并说明缺口，不得只根据项目 ID 猜测。
+回报必须保留 plan_id、batch_id、attempt_id、task_id、uid、expected_revision 和唯一 report_id；同一 report_id 的相同内容可安全重试，冲突内容拒绝；后续回报须读取当前 revision 并作为 expected_revision，过期回报不能覆盖新状态。目标不是本机时用 `--source-host HOST_ID` 匹配真实来源。`fixed` 与 `wontfix` 只进入 `to_verify`，并保留说明和可选的 commit、PR。`reopened` 只能撤回进行中或待验收的任务；派发登记为 failed 的批次不接受回报。标识校验不能证明回报确实来自目标会话；须核对真实来源，不凭其他材料冒充回报。新建会话须有 sent 回执，实际 ID 须从真实工具响应的顶层 threadId 核对；该字段缺失时无法导入，保留原始回报并说明缺口，不得只根据项目 ID 猜测。
 
 只有用户明确核验并作出决定后，才能执行 `work-verify --run RUN --batch BATCH_ID --task TASK_ID --attempt ATTEMPT_ID --revision REVISION --decision done|wontfix|todo --note USER_DECISION`。`todo` 表示用户要求继续处理，不自动重新派发。没有明确决定就保留待验收。发送结果不明仍保留 sending，回报不能改变发送状态。下次调用通过 ledger 汇总，已关闭的任务保留在原运行目录的历史中。
 
