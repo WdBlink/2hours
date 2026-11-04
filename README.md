@@ -24,7 +24,7 @@ $2hours 继续 /绝对路径/已有运行目录 中尚未分发的任务。
 3. 完成录制后，Agent 整理原话、截图、AI 理解和目标会话，在 **Two Hours 同一页**呈现统一审核。
 4. 修改或暂缓条目，最后确认一次。Agent 使用 Codex 原生工具分发，逐批保存真实回执。
 
-默认范围是昨天；自然周按当地周一至周日计算。录屏不会随报告预览自动启动。发送成功只表示任务已送达，不表示下游工作已完成。
+默认范围是昨天；自然周按当地周一至周日计算。录屏不会随报告预览自动启动。发送成功只表示任务已送达，不表示下游工作已完成。逐任务回报保留执行尝试和历史，Agent 声称完成后等待用户核验；下一轮审阅可汇总未关闭任务。具体边界见[文件合同](references/contracts.md)。
 
 集中审核沿用 Blurt 的专注审阅编排：左侧任务目录，中间大图与缩略图，右侧核对原话并直接编辑任务。文本框随内容自动伸展，截图下方选择暂缓或纳入执行，顶栏完成最终确认。窄屏按顺序显示证据和编辑区。审核界面的样式随服务加载，旧报告重新打开时也能使用新版界面，原报告、录音和批准快照保持不变。
 
@@ -118,7 +118,7 @@ node --test vendor/traceink/test/*.test.mjs
 
 | 项目 | 锁定版本 / 提交 | 用途 |
 | --- | --- | --- |
-| [Blurt](https://github.com/AGIHunt/blurt) | 0.5.0 · `53171c4`；选择性吸收 1.0.2 · `9b4a0e1` | 录屏、口述转录与圈画证据 |
+| [Blurt](https://github.com/AGIHunt/blurt) | 0.5.0 · `53171c4`；选择性吸收 1.0.2 · `9b4a0e1` 和 1.0.12 · `b9052e5` | 录屏、口述转录、圈画证据与任务状态合同 |
 | [Traceink](https://github.com/WdBlink/traceink) | 0.2.0 · `ecadc29` | 会话证据与工作线阅读合同 |
 | [Cubox CLI](https://github.com/OLCUBO/cubox-cli) | 1.0.10 · `6eb4e7b` | 收藏与正文读取 |
 | [answer-me-with-html](https://github.com/QingYunA/answer-me-with-html) | 0.5.7 · `fa42f5c` | Markdown 排版与 HTML renderer |

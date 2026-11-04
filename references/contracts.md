@@ -51,6 +51,15 @@ Blurt 原生输出放在 `blurt/items.json`，可保留 `reviewed: false` 生成
 
 调用成功后将原始工具响应保存为 JSON 文件，通过 `dispatch.py receipt --run RUN --batch ID --response FILE` 登记 `sent`。明确失败登记 `failed`；结果不明保留 `sending`，先查目标会话，不能盲目重发。`sent` 只表示工具确认发送，不表示任务完成。未发送批次可恢复；报告或批准后条目变化会使旧批准失效。
 
+### 逐任务执行回报
+
+领取批次时原子地写入 attempt ID 及每项任务的 UID，UID 由 plan ID、batch ID 和 task ID 确定。单次领取对应一次 attempt；不以会话名称或主题推断身份。原计划和批准保持不变，发送参数附带这些标识和回报格式。领取即为 `handed_off` 的工作状态，与 `sending` / `sent` / `failed` 派发状态分开；它不证明消息送达。
+
+`work-report --run RUN --report FILE --source-thread ID` 消费一个 JSON 对象，必填非空字符串 `plan_id`、`batch_id`、`attempt_id`、`task_id`、`uid`、`report_id`、`state`、`note`，另必填非负整数 `expected_revision`（首次为 0）；可选字符串 `agent`、`commit`、`pr`。state 为 `fixing`、`fixed`、`wontfix` 或 `reopened`。映射遵循 Blurt 的 `mark_fixed`：分别进入 `in_progress`、`to_verify`（claim 为 fixed 或 wontfix）、`todo`。原样保存声明及历史，同 ID 内容相同幂等，不同则报错；不匹配方案、批次、尝试、任务或当前 revision 的新回报拒绝；用户决定也增加 revision，防止延迟声明覆盖。待验收声明先撤回才能更新。记录由本机锁保护并原子写入，与派发状态同文件，避免并发写丢失。source-thread 对已有会话须与目标 thread_id 一致，source-host 默认 local 并须与目标 host_id 一致；新建会话须有 sent 回执并与原始响应顶层 threadId 一致，缺失或不同则拒绝。它校验关联，不验证 Agent 身份或声明真假。
+
+`work-verify` 需要当前 revision，仅供用户明确决定后使用，接受 `done`、`wontfix` 或 `todo` 与说明，只处理 `to_verify`；用户决定及此前工作均保留历史。它不会自动重发任务。`ledger --runs DIR` 汇总未关闭的任务及读取错误，默认 `~/.2hours/runs`；原始目标和投递状态分别列出。旧运行缺少 attempt 和任务记录，标为 `legacy_unavailable`，不会补造进度。跨轮 ID 不表示两次审阅中的任务必然是同一工作线；实际会话与证据需要核对。
+
+
 一次运行不会自动新建定时任务，不会打开历史内容中的任意链接，不会修改 Cubox 卡片。跨会话收尾、次日结果回收仍由宿主用 read_thread / wait_threads 验证实际状态。
 
 ## 可选自动派发
