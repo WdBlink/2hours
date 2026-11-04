@@ -50,8 +50,8 @@
     "A report moving to a new state carries agent, and commit/pr unless the target is in_progress, from handed_off, in_progress or to_verify work, as upstream set_state does (items.py:844-852)."
   ],
   "local_modifications": {
-    "scripts/dispatch.py": "Claim records by=app and the attempt authorization (manual: approval approved_at and approval_sha256; automatic: opt_in_id). Reports are rejected when delivery failed and accepted while it is sending. fsync and the run lock are kept; upstream write_text_atomic has neither.",
-    "tests/test_work_lifecycle.py": "Two Hours tests; the deliberate differences from lifecycle.json are listed there with reasons.",
+    "scripts/dispatch.py": "Claim records by=app and the attempt authorization (manual: approval approved_at and approval_sha256; automatic: opt_in_id). Reports are rejected when delivery failed and accepted while it is sending. fsync and the run lock are kept; upstream write_text_atomic has neither. A report_id already accepted is answered from the stored result before the failed-delivery check (upstream has no report IDs or delivery states). verify todo keeps to/agent and records the attempt and batch (see differences).",
+    "tests/test_work_lifecycle.py": "Two Hours tests; the deliberate differences from lifecycle.json are listed there with reasons. VERIFY_TODO_DIFFERENCES lists the verify todo fields that differ from upstream and is checked against this file.",
     "tests/test_write_json_retry.py": "Two Hours tests, including Windows-only tests with a reader holding the target open."
   },
   "differences": [
