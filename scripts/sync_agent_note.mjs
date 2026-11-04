@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { vendor, verifySource, sha256, sourcePath } from './agent_note_source.mjs';
 
 const repository = 'https://github.com/WdBlink/agent-note-cli';
@@ -109,7 +109,8 @@ export async function sync(repo, ref, destination = vendor, check = false) {
   finally { await fs.rmdir(lock); }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(await fs.realpath(process.argv[1])).href) {
+// Canonicalize both sides: Windows realpath expands 8.3 short names that import.meta.url keeps.
+if (process.argv[1] && await fs.realpath(process.argv[1]).catch(() => null) === await fs.realpath(fileURLToPath(import.meta.url))) {
   try {
     const { values } = parseArgs({ options: { repo: { type: 'string' }, ref: { type: 'string' }, dest: { type: 'string' }, check: { type: 'boolean' } } });
     if (values.ref && !values.repo) throw new Error('--ref requires --repo.');

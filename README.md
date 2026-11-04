@@ -47,7 +47,7 @@ Windows 已支持报告、审核、屏幕与麦克风录制、本地 SenseVoice 
 git clone https://github.com/WdBlink/2hours.git "${CODEX_HOME:-$HOME/.codex}/skills/2hours"
 cd "${CODEX_HOME:-$HOME/.codex}/skills/2hours"
 
-npm ci --prefix vendor/agent-note
+npm ci --ignore-scripts --prefix vendor/agent-note
 node scripts/work_review.mjs --build
 
 # 使用上游安装器获取固定版本的 Cubox 可执行文件；也可复用 PATH 中已有版本。

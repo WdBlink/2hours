@@ -68,3 +68,24 @@ test('ported workflow retains upstream index, dossier, provenance, cache and sta
   assert.match(rejected.stderr, /cannot be combined/);
   await assert.rejects(review({ ...options, signal: AbortSignal.abort() }), { name: 'AbortError' });
 });
+
+test('CLI entry points run when the loader path differs from the canonical path', async t => {
+  // Windows CI expands 8.3 short names (RUNNER~1) in fs.realpath but not in import.meta.url.
+  // A symlinked install run with --preserve-symlinks-main gives the same mismatch on every platform.
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), '2hours-entry-test-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const install = path.join(root, 'install with spaces');
+  await fs.mkdir(path.join(install, 'scripts'), { recursive: true });
+  const project = fileURLToPath(new URL('../', import.meta.url));
+  for (const name of ['agent_note_source.mjs', 'sync_agent_note.mjs', 'work_review.mjs']) await fs.copyFile(path.join(project, 'scripts', name), path.join(install, 'scripts', name));
+  const link = path.join(root, 'linked install');
+  try { await fs.symlink(install, link, process.platform === 'win32' ? 'junction' : 'dir'); }
+  catch (error) { if (error.code === 'EPERM') return t.skip('symlinks are not permitted here'); throw error; }
+  const run = (name, ...args) => spawnSync(process.execPath, ['--preserve-symlinks-main', path.join(link, 'scripts', name), ...args], { cwd: os.tmpdir(), encoding: 'utf8', timeout: 20000 });
+  const help = run('work_review.mjs', '--help');
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /Two Hours · bundled Agent Note workflow/, 'work_review must not exit 0 without running');
+  const sync = run('sync_agent_note.mjs', '--ref', 'HEAD');
+  assert.equal(sync.status, 1, 'sync_agent_note must run and reject --ref without --repo');
+  assert.match(sync.stderr, /--ref requires --repo/);
+});

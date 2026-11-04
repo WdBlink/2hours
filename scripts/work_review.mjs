@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { vendor, verifySource, verifyBuild, filesIn, sha256 } from './agent_note_source.mjs';
 
 const help = `Two Hours · bundled Agent Note workflow
@@ -32,7 +32,7 @@ export async function buildWorkflow() {
   await fs.rm(path.join(vendor, 'dist'), { recursive: true, force: true });
   const result = spawnSync(process.execPath, ['scripts/build.mjs'], { cwd: vendor, stdio: 'inherit' });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error('Upstream build failed. Run npm ci --prefix vendor/agent-note first.');
+  if (result.status !== 0) throw new Error('Upstream build failed. Run npm ci --ignore-scripts --prefix vendor/agent-note first.');
   const outputs = {};
   for (const name of await filesIn(path.join(vendor, 'dist'))) outputs[name] = sha256(await fs.readFile(path.join(vendor, 'dist', name)));
   await fs.writeFile(path.join(vendor, 'BUILD.json'), JSON.stringify({ sourceHash: source.sourceHash, outputs }, null, 2) + '\n');
@@ -92,7 +92,8 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(await fs.realpath(process.argv[1])).href) {
+// Canonicalize both sides: Windows realpath expands 8.3 short names that import.meta.url keeps.
+if (process.argv[1] && await fs.realpath(process.argv[1]).catch(() => null) === await fs.realpath(fileURLToPath(import.meta.url))) {
   process.stdout.on('error', error => { if (error.code === 'EPIPE') process.exit(0); else throw error; });
   main().catch(error => { console.error(`work-review: ${error.message}`); process.exitCode ||= 1; });
 }

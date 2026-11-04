@@ -13,7 +13,7 @@
 需要 Node.js >=22.16 和 npm。在本项目根目录执行：
 
 ```bash
-npm ci --prefix vendor/agent-note
+npm ci --ignore-scripts --prefix vendor/agent-note
 node scripts/work_review.mjs --build
 node scripts/work_review.mjs --check
 python3 scripts/run.py doctor
@@ -75,7 +75,7 @@ Claude workflow → Codex 关联由上游扫描器完成。只接受同一 Claud
 ```bash
 git -C /path/to/agent-note-cli fetch origin --tags
 node scripts/sync_agent_note.mjs --repo /path/to/agent-note-cli --ref TAG_OR_COMMIT
-npm ci --prefix vendor/agent-note
+npm ci --ignore-scripts --prefix vendor/agent-note
 node scripts/work_review.mjs --build
 node scripts/sync_agent_note.mjs --repo /path/to/agent-note-cli --ref TAG_OR_COMMIT --check
 node scripts/work_review.mjs --check

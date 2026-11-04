@@ -21,13 +21,15 @@ jobs:
         run: |
           python -m pip install -r requirements-windows.txt
           choco install ffmpeg --no-progress -y
-          npm.cmd ci --prefix vendor/answer-me-with-html/source
-          npm.cmd ci --prefix vendor/agent-note
+          npm.cmd ci --ignore-scripts --prefix vendor/answer-me-with-html/source
+          npm.cmd ci --ignore-scripts --prefix vendor/agent-note
           node scripts/work_review.mjs --build
       - name: Python tests
         run: python -B -m unittest discover -s tests -v
       - name: JavaScript checks
         run: |
+          # Fail on any non-zero native exit, not only the last command's.
+          $PSNativeCommandUseErrorActionPreference = $true
           node --check assets/bridge.js
           node --check assets/board.js
           node --test tests/agent_note_sync.test.mjs tests/work_review.test.mjs tests/workflow_lineage.test.mjs

@@ -59,6 +59,7 @@ class RunTests(unittest.TestCase):
                 self.assertNotIn("agent-note", report["commands"])
                 self.assertNotIn("traceink", report["skills"])
                 self.assertEqual(report["work_review"], ["/bin/node", str(root / "scripts/work_review.mjs")])
+                self.assertEqual(report["work_review_setup"][0], ["npm", "ci", "--ignore-scripts", "--prefix", str(root / "vendor/agent-note")])
                 self.assertEqual(report["agent_note_source"]["version"], "0.6.0")
                 self.assertEqual(workflow_check.call_args.args[0][-1], "--check")
                 self.assertEqual(report["recorder"]["name"], "Two Hours")

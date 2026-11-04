@@ -112,7 +112,7 @@ def doctor(args):
             missing.append("Xcode Command Line Tools (xcode-select --install)")
     print(json.dumps({"skills": paths, "commands": bins, "node_version": node_version,
                       "work_review": work_review, "agent_note_source": agent_note_source, "work_review_error": work_review_error,
-                      "work_review_setup": [["npm", "ci", "--prefix", str(ROOT / "vendor/agent-note")], [*work_review, "--build"]],
+                      "work_review_setup": [["npm", "ci", "--ignore-scripts", "--prefix", str(ROOT / "vendor/agent-note")], [*work_review, "--build"]],
                       "missing": missing, "cubox_setup": ["node", str(skill_dir("cubox") / "cli/scripts/install.js")],
                       "recorder": recorder, "recording_permissions": "not_tested",
                       "asr": [sys.executable, str(ROOT / "vendor/blurt/scripts/doctor.py")]}, ensure_ascii=False, indent=2))
