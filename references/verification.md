@@ -1,5 +1,14 @@
 # 集成核验
 
+## agent-note-cli 源码移植（2026-11-02）
+
+- 会话处理直接导入移植的原 `brief()` 与完整后端，不依赖全局 agent-note CLI。初次移植锁定 v0.6.0 / `fb36670545980f89f3ecd0b1d330a796b79f1fa5`，当时 60 个源文件原样保留在 `vendor/agent-note`，逐文件对照上游 Git 通过；嵌套 provenance、规则、许可证、依赖和锁文件完整保留。
+- `sync_agent_note.mjs` 按提交同步源码，跟随 service 的相对模块依赖；校验上游与内层来源记录。合成 Git 仓库测试验证新增／退役模块、重复同步、锁文件变化、构建失效、本地修改保护和并发同步拒绝。上游工作区的未提交改动不进入快照。
+- 146 项 Python unittest、6 项 Two Hours 源码集成测试、52 项原上游核心测试及两份 UI JavaScript 语法检查通过。doctor 检查移植源码、构建产物、运行依赖和 Node.js >=22.16，不调用模型。
+- 集成测试使用上游原有模拟响应运行摘要、索引合成、深读分析、核查和成文 5 个阶段；和直接调用上游 service 的正式索引、深读、证据及 provenance 一致。只读复用没有新模型调用，证据变化返回 stale 与退出码 2，互斥参数和取消信号按约定处理。
+- 迁移到带空格的独立目录并从其他 cwd 运行后，工作流与更新检查均通过。修复入口对系统符号链接路径的判断；`.gitattributes` 保持 vendored 文件字节一致，生成物在本机构建并校验哈希。此验证在 macOS / Node 26 完成，不代表其他平台均已手工验收。
+- 演练仅使用隔离的合成来源，未调用真实分析模型或重新验收录屏、ASR 与跨会话派发。上游破坏性 API 变更仍需通过构建和兼容测试后接入。
+
 ## v0.3.0 发布检查（2026-10-27）
 
 - 122 项 Python unittest、14 项内置 Traceink 测试及两份 UI JavaScript 语法检查通过。覆盖自适应看板、独立阅读状态、录制身份、内存压力退出、统一审核、自动输入授权、撤销、回执与重复派发保护。
@@ -55,3 +64,16 @@
 - 本地桥接不能让已结束的 Codex 回合自动恢复。首次实用应保持原会话运行并等待录音及审核。
 - 未复刻 GitHub 展示网页。复用的是用户指定仓库的 HTML renderer；clone-website 的浏览器检查方法用于核验本地报告，而非声称视觉复刻。
 - 模型 token 与完整人机周期耗时 unavailable；没有进行效率提升或“两小时足够”的实测。
+
+## 2026-11-03 workflow 来源回归
+
+- 修复在 Agent Notebook 共享扫描器与 agent-note-cli service 形成提交，再用现有同步脚本移植到 Two Hours；SOURCE.json 与嵌套 backend/provenance.json 保留实际 Git 提交及逐文件哈希。原主工作区与上游未提交改动没有纳入。
+- 可复现夹具来自 dynamic-workflow 0.4.2 的 launch/status JSON、Claude Bash tool_use/tool_result 和 Codex session_meta 协议；没有调用真实模型或创建真实工作流。父来源、子来源、原生后代、无关同目录会话、冲突与缺失来源、旧会话恢复、索引、深读、导航、缓存及 stale 均有回归。合成模型仅验证接口和流程，不能推定真实模型质量。
+- 来源支持以锁定提交和测试为准。录制截图包含 Cursor，与上游 main 已合并代码一致；v0.6.0 tag 本身不含它。没有声称本机 Cursor 登录或真实 compiler 已实测。
+
+## 2026-11-04 Windows 入口与安装
+
+- `work_review.mjs`、`sync_agent_note.mjs` 的入口判断改为两边都取 `fs.realpath` 后比较。Windows 上 `fs.realpath` 会展开 8.3 短名（如 `RUNNER~1`），`import.meta.url` 不展开，旧写法两边不等，脚本不执行且返回 0。新增回归测试用符号链接加 `--preserve-symlinks-main` 构造同类路径差异，在 Linux 上修复前失败、修复后通过；Windows 8.3 场景本身由 Windows CI 验证。
+- 文档、doctor 的 `work_review_setup` 和 Windows CI 中的 `npm ci` 改为 `npm ci --ignore-scripts`。锁文件里带安装脚本的只有 esbuild（预编译平台包随 optionalDependencies 安装，构建不依赖其 postinstall）和仅限 macOS 的 fsevents；Linux 上用 `--ignore-scripts` 安装后 `--build`、`--check` 和测试均通过。
+- Windows CI 的 JavaScript 步骤加 `$PSNativeCommandUseErrorActionPreference = $true`。之前 PowerShell 只按最后一条命令的退出码判定，d6a28bb 的 run 41672848137 中 `work_review.test.mjs` 失败（7 项中 1 项），步骤仍显示成功。
+- 已知问题：上游 `vendor/agent-note/backend/upstream/tests/agent-sessions.test.ts` 有 4 个用例在 bc52fac 的 Windows CI（run 41671062239）失败：Copilot 浅层历史（路径分隔符 `C:/` 与 `C:\` 混用）、Git worktree 的 repositoryPath（同类分隔符差异）、合并模型摘要（模拟 fs 按字符串匹配路径，标题为 undefined）、Cursor 项目 slug（`C:` 被解析成 `:`，ENOENT）。d6a28bb 同步的上游夹具只在测试里对路径做 `path.resolve` 归一，Windows CI 上 66/66 通过；上游扫描器返回的路径分隔符本身没有改。本仓不改 vendored 源码，留待上游处理。

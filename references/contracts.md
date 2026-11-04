@@ -4,7 +4,7 @@
 
 ## 报告来源
 
-`manifest.json` 由当前宿主完成证据读取后写入。下面是结构示例，示例 ID 不能用于真实派发。
+`manifest.json` 由当前宿主运行移植的 agent-note-cli 处理代码，取得正式索引、深读并结合 Cubox 材料后写入。源码边界、同步方式与字段映射见 [agent-note-cli 合同](agent-note.md)。下面是结构示例，示例 ID 不能用于真实派发。
 
 ```json
 {
@@ -18,6 +18,8 @@
 ```
 
 Cubox 来源使用 `provider: cubox`、`card_id`、`url`、`status: full_text|metadata_only|failed`。线程目标来自 Codex 原生工具的核验结果；目录路径不是 project ID。项目目标使用 `type: project`、`project_id`、`title`、`source_ids`，表示在该项目中新建会话，审核时必须明确显示“新建会话”。
+
+会话来源保留 agent-note-cli 的证据 ID、原生 provider / sessionId、sourcePath、range 和 contentHash，在来源的 `upstream` 中登记导出文件与索引版本；工作 panel 的 `upstream_worklines` 保留工作线及对应索引。`work_scope` 单独登记实际日粒度与日期，`scope` 继续保存用户请求范围。覆盖说明继承上游警告、排除、失败和未解决状态，不能把上游缺失索引或失败写成完整读取。原样导出 JSON 保存在私有 `sources/agent-note/`，不进入代码仓库。
 
 每个报告二级标题使用 `## A1 标题` 等 answer-me-with-html 显式 panel ID；与 `panels` 一一对应。卡片上的 ID 是视频定位依据。页面焦点日志只有辅助意义，不可用 `meta.started_at` 直接减去墙钟来推断视频时间，因为选择窗口、倒计时、暂停及重录会改变时基。
 
