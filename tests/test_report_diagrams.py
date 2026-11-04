@@ -6,6 +6,8 @@ import io
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -92,6 +94,71 @@ class DiagramTests(unittest.TestCase):
         self.snapshot.write_text('{}', encoding='utf-8')
         with self.assertRaisesRegex(ValueError, 'hash changed'):
             diagrams.expand_diagrams(self.root, self.manifest, self.markdown)
+
+    def test_quote_must_be_the_whole_text_or_a_whole_sentence(self):
+        self.snapshot.write_text(json.dumps({'fact': '本地检查通过，但缺少独立验收。', 'gap': '未核实异常出口。',
+            'log': 'Build passed. Release is not verified! 版本 0.4.2 已发布\n第二行没有句号\n结尾'}, ensure_ascii=False), encoding='utf-8')
+        digest = hashlib.sha256(self.snapshot.read_bytes()).hexdigest()
+        for item in self.diagram['evidence']:
+            item['sha256'] = digest
+        for pointer, quote in [('/fact', '本地检查通过，但缺少独立验收。'), ('/log', 'Release is not verified!'),
+                               ('/log', 'Build passed.'), ('/log', '版本 0.4.2 已发布'), ('/log', '第二行没有句号')]:
+            with self.subTest(quote=quote):
+                self.diagram['evidence'][0].update(pointer=pointer, quote=quote)
+                self.save()
+                diagrams.expand_diagrams(self.root, self.manifest, self.markdown)
+        for pointer, quote in [('/fact', '检查'), ('/fact', '本地检查通过'), ('/fact', '缺少独立验收。'),
+                               ('/log', 'passed'), ('/log', '2 已发布'), ('/log', 'Build passed. Release'), ('/log', '第二行')]:
+            with self.subTest(quote=quote):
+                self.diagram['evidence'][0].update(pointer=pointer, quote=quote)
+                self.save()
+                with self.assertRaisesRegex(ValueError, 'quote is not'):
+                    diagrams.expand_diagrams(self.root, self.manifest, self.markdown)
+
+    def test_non_object_entries_are_rejected_with_value_error(self):
+        changes = [
+            lambda d, m: m['sources'][0].update(upstream=['sources/facts.json']),
+            lambda d, m: d.update(checks=['本地通过不能单独证明完成']),
+            lambda d, m: d.update(unknowns=[None]),
+            lambda d, m: d.update(paths=['T1']),
+        ]
+        for alter in changes:
+            with self.subTest(alter=alter):
+                diagram, manifest = copy.deepcopy(self.diagram), copy.deepcopy(self.manifest)
+                alter(diagram, manifest)
+                self.manifest, saved = manifest, self.manifest
+                self.save(diagram)
+                self.manifest = saved
+                with self.assertRaises(ValueError):
+                    diagrams.expand_diagrams(self.root, manifest, self.markdown)
+        self.save()
+        (self.root / 'diagram-plan.json').write_text('[]', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'schema'):
+            diagrams.expand_diagrams(self.root, self.manifest, self.markdown)
+        self.manifest['sources'][0]['upstream'] = None
+        self.save()
+        self.assertIn('当前 · 等待独立验收', diagrams.expand_diagrams(self.root, self.manifest, self.markdown))
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/report_diagrams.py'), '--run', str(self.root)],
+                                capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.manifest['sources'][0]['upstream'] = 'sources/facts.json'
+        (self.root / 'manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/report_diagrams.py'), '--run', str(self.root)],
+                                capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertIn('diagram:', result.stderr)
+
+    def test_panel_headings_inside_code_do_not_place_diagrams(self):
+        self.save()
+        for code in ('```text\n## A1 示例\n```\n', '~~~\n## A1 示例\n~~~\n', '- ```text\n  ## A1 示例\n  ```\n'):
+            with self.subTest(code=code):
+                markdown = ('---\ntitle: 工作线\ntemplate: doc\n---\n\n## A2 普通事实\n\n' + code
+                            + '\n{{diagram:D1}}\n')
+                with self.assertRaisesRegex(ValueError, 'different panel'):
+                    diagrams.expand_diagrams(self.root, self.manifest, markdown)
+        markdown = self.markdown.replace('{{diagram:D1}}', '```text\n## A2 示例\n```\n\n{{diagram:D1}}')
+        self.assertIn('当前 · 等待独立验收', diagrams.expand_diagrams(self.root, self.manifest, markdown))
 
     def test_placement_and_plan_are_optional_but_not_ambiguous(self):
         self.assertEqual(diagrams.expand_diagrams(self.root, self.manifest, '普通文字'), '普通文字')

@@ -9,6 +9,7 @@ from pathlib import Path
 MARKER = re.compile(r'^\{\{diagram:(D[1-9][0-9]*)\}\}$', re.M)
 BASES = {'observed': '来源记录', 'inferred': '解释推断', 'proposed': '建议路线'}
 STATES = {'observed': '已观察', 'blocked': '阻塞', 'failed': '失败', 'unknown': '未知', 'proposed': '待验证'}
+SENTENCE_END = '。！？；!?;'
 
 
 def require(condition, message):
@@ -23,6 +24,24 @@ def plain(value):
 
 def md(value):
     return re.sub(r'([\\`*_{}\[\]()#+.!|>~-])', r'\\\1', str(value)).replace('<', '&lt;').replace('\r', ' ').replace('\n', ' ')
+
+
+def quoted(quote, text):
+    """A quote is the whole source string or whole sentences of it, not an arbitrary fragment."""
+    if not isinstance(quote, str) or not quote.strip():
+        return False
+    start = text.find(quote)
+    while start >= 0:
+        before, after = text[:start], text[start + len(quote):]
+        last = quote.rstrip()[-1]
+        opens = (not before.strip() or before[-1] == '\n' or before.rstrip()[-1] in SENTENCE_END
+                 or (before[-1].isspace() and before.rstrip()[-1] == '.'))
+        closes = (not after.strip() or after[0] == '\n' or after[0] in SENTENCE_END or last in SENTENCE_END
+                  or (last == '.' and after[0].isspace()))
+        if opens and closes:
+            return True
+        start = text.find(quote, start + 1)
+    return False
 
 
 def indexed(items):
@@ -41,7 +60,8 @@ def evidence_for(root, panel, sources, items):
         source_id = item.get('source_id')
         require(source_id in panel['source_ids'] and source_id in sources, 'evidence must belong to this panel')
         source = sources[source_id]
-        upstream = source.get('upstream', {})
+        upstream = source.get('upstream') or {}
+        require(isinstance(upstream, dict), 'source upstream must be an object')
         allowed = [source.get('snapshot_file'), upstream.get('view_file'), upstream.get('dossier_file')]
         filename = item.get('file')
         require(isinstance(filename, str) and filename in allowed, 'snapshot file is not declared by its source')
@@ -65,7 +85,7 @@ def evidence_for(root, panel, sources, items):
                     value = value[key]
         except (KeyError, IndexError, TypeError, ValueError):
             raise ValueError('diagram: source pointer does not resolve') from None
-        require(isinstance(value, str) and isinstance(item.get('quote'), str) and item['quote'].strip() and item['quote'] in value, 'quote is not present at the source pointer')
+        require(isinstance(value, str) and quoted(item.get('quote'), value), 'quote is not the whole text or whole sentences at the source pointer')
     return evidence
 
 
@@ -112,6 +132,7 @@ def compile_diagram(root, manifest, diagram):
     require(isinstance(paths, list) and paths, 'at least one evidence replay path is required')
     lines += ['', '#### 路径回放', '']
     for number, replay in enumerate(paths, 1):
+        require(isinstance(replay, dict), 'each replay path must be an object')
         steps = replay.get('steps')
         require(isinstance(steps, list) and steps and all(key in edges for key in steps), 'invalid replay path')
         require(all(edges[left]['to'] == edges[right]['from'] for left, right in zip(steps, steps[1:])), 'replay path is disconnected')
@@ -133,6 +154,7 @@ def compile_diagram(root, manifest, diagram):
         if not diagram[field]:
             lines.append('本图未登记该类主张；以范围和限制说明为准。')
         for claim in diagram[field]:
+            require(isinstance(claim, dict), field + ' entries must be objects')
             lines.append(f'- {md(plain(claim.get("text")))}。{md(refs(claim))}')
     lines += ['', '#### 文字证据', '']
     for key, item in evidence.items():
@@ -154,13 +176,13 @@ def expand_diagrams(root, manifest, markdown):
         return markdown
     require(not plan_file.is_symlink(), 'symlink plan is not allowed')
     plan = json.loads(plan_file.read_text(encoding='utf-8'))
-    require(plan.get('schema') == 'twohours-diagrams/v1', 'unsupported plan schema')
+    require(isinstance(plan, dict) and plan.get('schema') == 'twohours-diagrams/v1', 'unsupported plan schema')
     diagrams = indexed(plan.get('diagrams'))
     require(len(markers) == len(diagrams) and {m[1] for m in markers} == set(diagrams), 'each diagram must appear once in the report')
     rendered = {}
     for marker in markers:
         diagram = diagrams[marker[1]]
-        heading = re.findall(r'^## ([A-Z][0-9]{0,2})\s+', markdown[:marker.start()], re.M)
+        heading = [match[1] for match in re.finditer(r'^## ([A-Z][0-9]{0,2})\s+', markdown[:marker.start()], re.M) if match.start() in prose]
         require(heading and heading[-1] == diagram.get('panel_id'), 'diagram is placed in a different panel')
         rendered[marker[1]] = compile_diagram(root, manifest, diagram)
     result, end = [], 0

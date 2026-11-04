@@ -37,7 +37,7 @@
 
 `state` 为 observed、blocked、failed、unknown、proposed。`basis` 为 observed、inferred、proposed，分别表示来源记录、解释推断、建议路线。推断节点使用 unknown，建议节点使用 proposed；只有来源记录能标已观察、失败或阻塞。路径须同时核对沿途节点和迁移的性质。实线表示来源记录，虚线表示推断或建议；图和证据表同时显示性质，颜色不承担完成结论。
 
-每个证据文件必须位于 `RUN/sources/`，并在对应 manifest 来源中声明为 `snapshot_file`。保存文件字节的 SHA-256；pointer 使用 JSON Pointer，quote 必须是该位置字符串的真实子串。只从已读正式字段摘录，不以 rawModelText 代替证据。计划和快照保持私有，不进入代码仓库。
+每个证据文件必须位于 `RUN/sources/`，并在对应 manifest 来源中声明为 `snapshot_file`。保存文件字节的 SHA-256；pointer 使用 JSON Pointer，quote 必须是该位置的整段字符串，或其中完整的一句或几句（以句末标点或换行为界），不接受截取的词或半句。只从已读正式字段摘录，不以 rawModelText 代替证据。计划和快照保持私有，不进入代码仓库。
 
 标签和条件使用单行纯文字，不嵌入 AM 语法、Markdown 或 HTML。生成器只输出随包 AM flow 与标准 Markdown，详情保留节点表、迁移表、编号回放、反证、未知和文字摘录。需要多方交接、比较或数值图时，仍按报告合同选用 sequence、表格或其他标准组件，不强行变成状态图。
 
