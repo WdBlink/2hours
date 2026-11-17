@@ -99,7 +99,7 @@ class LevelUpTests(unittest.TestCase):
 
     def run_tracks(self, workers, empty=False):
         env = self.env
-        # Different frequencies AND signs remain distinguishable after normalization.
+        # Different frequencies remain distinguishable regardless of chunk phase.
         original = [tone(.02, 220), -tone(.01, 330)]
         before = [x.copy() for x in original]
         vad_inputs, calls, saved = [], [], []
@@ -114,7 +114,10 @@ class LevelUpTests(unittest.TestCase):
             def transcribe(self, x):
                 barrier.wait(timeout=5)  # workers=2 must actually execute concurrent chunks
                 calls.append((x, threading.get_ident()))
-                label = 'mic' if x[1] > 0 else 'system'
+                # Windowed spectral magnitude identifies the audio, not its phase/sign.
+                spectrum = np.abs(np.fft.rfft(x * np.hanning(len(x))))
+                frequency = np.fft.rfftfreq(len(x), 1 / env['SR'])[spectrum.argmax()]
+                label = 'mic' if frequency < 275 else 'system'
                 return [(.05, len(x) / env['SR'] + .1, label)]
 
         def vad(x, max_speech):
