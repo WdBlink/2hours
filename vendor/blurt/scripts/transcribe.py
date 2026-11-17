@@ -122,6 +122,26 @@ def load_audio(path: Path, track: int = 0) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768
 
 
+LEVEL_QUIET = 0.08      # a take whose loudest moments stay under this (≈ −22 dBFS) is quiet: an ordinary take's are ~0.18
+LEVEL_PEAK = 0.25       # where a quiet take's loudest moments are brought to (≈ −12 dBFS)
+LEVEL_MAX_GAIN = 32.0   # +30 dB at most: below that it is a muted or dead input, not a quiet voice
+
+
+def level_up(samples: np.ndarray) -> np.ndarray:
+    """Quiet audio brought up to a speaking level before the VAD and the model hear it. Someone speaking softly, or
+    further from the microphone, records 10–30 dB under a normal take, and the VAD and the models hear that worse than
+    the same words at a normal level: whole sentences go missing (docs/design/dictation.md §Quiet speech). Only a take
+    that is quiet is touched — audio at a usual level is returned as it is, and nothing is ever turned down. The
+    loudest moments set the gain (the 99.9th percentile, so one click doesn't), and only where the VAD then decides
+    whether there is speech at all — a room's hiss made louder is still not handed to a model as words."""
+    if len(samples) == 0:
+        return samples
+    peak = float(np.percentile(np.abs(samples), 99.9))
+    if peak <= 0 or peak >= LEVEL_QUIET:
+        return samples
+    return (samples * min(LEVEL_MAX_GAIN, LEVEL_PEAK / peak)).astype(samples.dtype, copy=False)
+
+
 def vad_segments(samples: np.ndarray, max_speech: float = 25) -> list[tuple[float, float]]:
     import sherpa_onnx
     cfg = sherpa_onnx.VadModelConfig()
@@ -335,6 +355,7 @@ def cmd_run(a):
     results = []
     for track in range(min(n_tracks, 2)):
         samples = load_audio(src, track)
+        samples = level_up(samples)
         duration = max(duration, len(samples) / SR)
         segs = vad_segments(samples, max_speech=min(25, backend.max_chunk))
         chunks = group_chunks(segs, backend.max_chunk)
