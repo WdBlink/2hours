@@ -50,7 +50,7 @@
     "scripts/doctor.py": "Report the actual recording identity and explain app-specific permissions without requesting them. Windows: probe Tk/PortAudio and declare sounddevice for isolated uv diagnostics.",
     "recorder/macos/BlurtRecorder.swift": "Read bundle identity and paths, use distribution labels/icons/notification names, accept command files, and support permission-free identity diagnostics. Selectively port 1.0.2 four-second movie fragments and disabled frame reordering; this does not implement automatic restart or stitching. Keep static video and silent tracks advancing; normalize PCM through AVAudioConverter before filling silence, drain pending media on stop, and retain failed app sessions.",
     "scripts/transcribe.py": "Pin a SHA-256 per model download source and discard downloads that do not match (hashes from Hugging Face LFS oids and the GitHub release digest, checked 2026-11-02).",
-    "scripts/tk_recorder.py": "Consume the shared append-only command log without unlinking files held by concurrent writers. Windows: enforce max duration, retain failed/empty segments, stop on callback errors, include audio frame/overflow telemetry."
+    "scripts/tk_recorder.py": "Consume the shared append-only command log without unlinking files held by concurrent writers. Windows: enforce max duration, retain failed/empty segments, stop on callback errors, include audio frame/overflow telemetry. Selectively adapt the MIT AGIHunt/blurt Tk capture exclusion gate from commit 9a34906723a5413caf3269ce23e27885a21146f4 (parent c3d82c9c46acd2f9546c85c485c15b0e1cc806de): skip affinity before ctypes/window access for builds below 19041, preserving the local HWND and exception behavior."
   },
   "upstream_inspected": {
     "version": "1.0.2",
@@ -58,7 +58,8 @@
     "verified_on": "2026-10-28",
     "scope": "Selectively reviewed upstream recording and annotation changes; the bundled baseline remains 0.5.0.",
     "selected_changes": [
-      "Use four-second movie fragments and disable video frame reordering, as in the upstream macOS recorder, to improve recoverability after interrupted writing."
+      "Use four-second movie fragments and disable video frame reordering, as in the upstream macOS recorder, to improve recoverability after interrupted writing.",
+      "MIT AGIHunt/blurt commit 9a34906723a5413caf3269ce23e27885a21146f4 (parent c3d82c9c46acd2f9546c85c485c15b0e1cc806de), skills/blurt/scripts/tk_recorder.py: select the Windows 10 2004 build 19041 predicate and early return before ctypes/window access; adapt only this gate to the existing local vendor/blurt/scripts/tk_recorder.py exclusion function and retain its HWND fallback, 0x11 affinity, and swallowed exceptions."
     ],
     "not_imported": "The 1.0.2 multi-module application, live/snap/ink flows, segmented writer recovery and standalone review require new protocols and dependencies; they do not replace the existing Two Hours capture and unified review integration."
   }
