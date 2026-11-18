@@ -47,11 +47,21 @@ def enable_dpi_awareness() -> None:
                 pass
 
 
+# Before build 19041, Windows treats 0x11 as WDA_MONITOR and captures a black window.
+EXCLUDE_FROM_CAPTURE_BUILD = 19041
+
+
+def excludes_from_capture(build: int) -> bool:
+    return build >= EXCLUDE_FROM_CAPTURE_BUILD
+
+
 def exclude_from_capture(win) -> None:
-    """Hide a Tk window from screen capture (Windows 10 2004+)."""
+    """Hide a Tk window from screen capture on Windows 10 2004+."""
     if not IS_WIN:
         return
     try:
+        if not excludes_from_capture(sys.getwindowsversion().build):
+            return
         import ctypes
         win.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
